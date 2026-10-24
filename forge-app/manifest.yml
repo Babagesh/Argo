@@ -1,0 +1,41 @@
+modules:
+  jira:projectPage:
+    - key: scrumpulse-command-center
+      resource: audit-ui
+      resolver:
+        function: ui-resolver
+      title: ScrumPulse Agent & Audit Center
+  jira:issuePanel:
+    - key: scrumpulse-provenance-panel
+      resource: audit-ui
+      resolver:
+        function: ui-resolver
+      title: ScrumPulse Meeting Provenance & Rollback
+      icon: https://developer.atlassian.com/platform/forge/images/icons/issue-panel-icon.svg
+  webtrigger:
+    - key: agent-action-webhook
+      function: webhook-handler
+  function:
+    - key: ui-resolver
+      handler: index.uiHandler
+    - key: webhook-handler
+      handler: index.webhookHandler
+resources:
+  - key: audit-ui
+    path: static/audit-ui/build
+permissions:
+  scopes:
+    - read:jira-work
+    - write:jira-work
+    - read:jira-user
+    - storage:app
+    - read:page:confluence
+    - search:confluence
+  external:
+    fetch:
+      backend:
+        - address: "*"
+app:
+  runtime:
+    name: nodejs22.x
+  id: ari:cloud:ecosystem::app/2b363638-1c94-4c9e-b511-bff1729b62b5

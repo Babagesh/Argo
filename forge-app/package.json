@@ -1,0 +1,14 @@
+{
+  "name": "scrummy-forge-app",
+  "version": "1.0.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@forge/api": "^8.3.0",
+    "@forge/kvs": "^2.1.0",
+    "@forge/resolver": "^2.0.1"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  }
+}
