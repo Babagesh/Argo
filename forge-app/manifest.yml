@@ -1,16 +1,18 @@
 modules:
   jira:projectPage:
     - key: scrumpulse-command-center
-      resource: audit-ui
+      resource: main
+      render: native
       resolver:
         function: ui-resolver
-      title: ScrumPulse Agent & Audit Center
+      title: Argo
   jira:issuePanel:
     - key: scrumpulse-provenance-panel
-      resource: audit-ui
+      resource: panel
+      render: native
       resolver:
         function: ui-resolver
-      title: ScrumPulse Meeting Provenance & Rollback
+      title: Argo Meeting Provenance
       icon: https://developer.atlassian.com/platform/forge/images/icons/issue-panel-icon.svg
   webtrigger:
     - key: agent-action-webhook
@@ -21,8 +23,10 @@ modules:
     - key: webhook-handler
       handler: index.webhookHandler
 resources:
-  - key: audit-ui
-    path: static/audit-ui/build
+  - key: main
+    path: src/frontend/index.tsx
+  - key: panel
+    path: src/frontend/panel.tsx
 permissions:
   scopes:
     - read:jira-work
