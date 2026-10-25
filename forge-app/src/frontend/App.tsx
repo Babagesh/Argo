@@ -249,53 +249,78 @@ function MeetingDetail({ id, onBack }: { id: string; onBack: () => void }) {
         <Text>{`${meeting.date} · started ${formatTime(meeting.startedAt)} · ${formatDuration(meeting.durationSec)}`}</Text>
       </Stack>
 
-      <Box padding="space.200" backgroundColor="color.background.neutral">
-        <Stack space="space.150">
-          <Heading size="medium">Summary</Heading>
-          <Text>
-            {meeting.summary || (meeting.status === 'live' ? 'The summary is written when the meeting ends.' : 'No summary.')}
-          </Text>
-          {meeting.keyPoints.length > 0 && (
-            <>
-              <Text><Strong>Key points</Strong></Text>
-              <Stack space="space.050">
-                {meeting.keyPoints.map((p) => <Text key={p}>{`• ${p}`}</Text>)}
+      {/* The first tab is selected by default, so the page opens on what Argo did. */}
+      <Tabs id="meeting-detail-tabs">
+        <TabList>
+          <Tab>Commands executed</Tab>
+          <Tab>Meeting notes</Tab>
+        </TabList>
+
+        <TabPanel>
+          <Box padding="space.200">
+            <Stack space="space.250">
+              <Stack space="space.100">
+                <Heading size="medium">Commands heard</Heading>
+                {meeting.commands.length === 0 ? (
+                  <Text>{'No "Hey Argo" commands in this meeting.'}</Text>
+                ) : (
+                  <DynamicTable head={commandHead} rows={commandRows} />
+                )}
               </Stack>
-            </>
-          )}
-          {meeting.decisions.length > 0 && (
-            <>
-              <Text><Strong>Decisions</Strong></Text>
-              <Inline space="space.100" shouldWrap>
-                {meeting.decisions.map((d) => <Lozenge key={d}>{d}</Lozenge>)}
-              </Inline>
-            </>
-          )}
-        </Stack>
-      </Box>
 
-      {meeting.notes && (
-        <Stack space="space.100">
-          <Heading size="medium">Meeting notes</Heading>
-          <Text>{meeting.notes}</Text>
-        </Stack>
-      )}
+              <Stack space="space.100">
+                <Heading size="medium">Jira changes made</Heading>
+                {meeting.actions.length === 0 ? (
+                  <Text>No Jira changes were made.</Text>
+                ) : (
+                  <DynamicTable head={head} rows={rows} />
+                )}
+              </Stack>
+            </Stack>
+          </Box>
+        </TabPanel>
 
-      <Stack space="space.100">
-        <Heading size="medium">Commands heard</Heading>
-        {meeting.commands.length === 0 ? (
-          <Text>{'No "Hey Argo" commands in this meeting.'}</Text>
-        ) : (
-          <DynamicTable head={commandHead} rows={commandRows} />
-        )}
-      </Stack>
+        <TabPanel>
+          <Box padding="space.200">
+            <Stack space="space.250">
+              <Box padding="space.200" backgroundColor="color.background.neutral">
+                <Stack space="space.150">
+                  <Heading size="medium">Summary</Heading>
+                  <Text>
+                    {meeting.summary ||
+                      (meeting.status === 'live' ? 'The summary is written when the meeting ends.' : 'No summary.')}
+                  </Text>
+                  {meeting.keyPoints.length > 0 && (
+                    <>
+                      <Text><Strong>Key points</Strong></Text>
+                      <Stack space="space.050">
+                        {meeting.keyPoints.map((p) => <Text key={p}>{`• ${p}`}</Text>)}
+                      </Stack>
+                    </>
+                  )}
+                  {meeting.decisions.length > 0 && (
+                    <>
+                      <Text><Strong>Decisions</Strong></Text>
+                      <Inline space="space.100" shouldWrap>
+                        {meeting.decisions.map((d) => <Lozenge key={d}>{d}</Lozenge>)}
+                      </Inline>
+                    </>
+                  )}
+                </Stack>
+              </Box>
 
-      <Stack space="space.100">
-        <Heading size="medium">Agent actions</Heading>
-        {meeting.actions.length === 0 ? <Text>No Jira changes were made.</Text> : <DynamicTable head={head} rows={rows} />}
-      </Stack>
+              {meeting.notes && (
+                <Stack space="space.100">
+                  <Heading size="medium">Notes</Heading>
+                  <Text>{meeting.notes}</Text>
+                </Stack>
+              )}
 
-      <CreateTicket meeting={meeting} />
+              <CreateTicket meeting={meeting} />
+            </Stack>
+          </Box>
+        </TabPanel>
+      </Tabs>
     </Stack>
   );
 }
