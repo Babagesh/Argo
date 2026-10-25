@@ -22,6 +22,8 @@ resolver.define('getMeetings', () => callMeetingsApi('/meetings'));
 
 resolver.define('getMeeting', ({ payload }) => callMeetingsApi(`/meeting?id=${encodeURIComponent(payload.id)}`));
 
+resolver.define('getTranscript', ({ payload }) => callMeetingsApi(`/transcript?id=${encodeURIComponent(payload.id)}`));
+
 resolver.define('getIssueActions', ({ payload }) =>
   callMeetingsApi(`/issue-actions?key=${encodeURIComponent(payload.key)}`),
 );
