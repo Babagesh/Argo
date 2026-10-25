@@ -123,6 +123,16 @@ function Fact({ label, value }: { label: string; value: string }) {
   );
 }
 
+// Wall-clock time over how far into the meeting it happened.
+function TimeStamp({ at, startedAt, suffix = '' }: { at: string; startedAt: string; suffix?: string }) {
+  return (
+    <Stack space="space.025">
+      <Text weight="medium">{formatClock(at)}</Text>
+      <Text size="small" color="color.text.subtle">{`+${intoMeeting(at, startedAt)}${suffix}`}</Text>
+    </Stack>
+  );
+}
+
 const StatusLozenge = ({ status }: { status: Meeting['status'] }) => (
   <Lozenge appearance={status === 'live' ? 'inprogress' : 'success'} isBold>
     {status === 'live' ? 'Live' : 'Complete'}
@@ -390,15 +400,7 @@ function MeetingDetail({ id, onBack }: { id: string; onBack: () => void }) {
   const commandRows = meeting.commands.map((c) => ({
     key: c.id,
     cells: [
-      {
-        key: 'time',
-        content: (
-          <Stack space="space.025">
-            <Text weight="medium">{formatClock(c.at)}</Text>
-            <Text size="small" color="color.text.subtle">{`+${intoMeeting(c.at, t0)} into meeting`}</Text>
-          </Stack>
-        ),
-      },
+      { key: 'time', content: <TimeStamp at={c.at} startedAt={t0} suffix=" into meeting" /> },
       { key: 'said', content: <Text weight="medium">{c.transcript}</Text> },
       { key: 'intent', content: c.intent ? <Tag text={c.intent.replace(/_/g, ' ')} color="blue" /> : '—' },
       {
@@ -415,15 +417,7 @@ function MeetingDetail({ id, onBack }: { id: string; onBack: () => void }) {
   const actionRows = meeting.actions.map((a) => ({
     key: a.id,
     cells: [
-      {
-        key: 'time',
-        content: (
-          <Stack space="space.025">
-            <Text weight="medium">{formatClock(a.at)}</Text>
-            <Text size="small" color="color.text.subtle">{`+${intoMeeting(a.at, t0)} into meeting`}</Text>
-          </Stack>
-        ),
-      },
+      { key: 'time', content: <TimeStamp at={a.at} startedAt={t0} suffix=" into meeting" /> },
       { key: 'ticket', content: <Lozenge appearance="inprogress" isBold>{a.issueKey || '—'}</Lozenge> },
       {
         key: 'what',
@@ -443,15 +437,7 @@ function MeetingDetail({ id, onBack }: { id: string; onBack: () => void }) {
   const transcriptRows = transcript.map((s, i) => ({
     key: `${i}-${s.at}`,
     cells: [
-      {
-        key: 'time',
-        content: (
-          <Stack space="space.025">
-            <Text weight="medium">{formatClock(s.at)}</Text>
-            <Text size="small" color="color.text.subtle">{`+${intoMeeting(s.at, t0)}`}</Text>
-          </Stack>
-        ),
-      },
+      { key: 'time', content: <TimeStamp at={s.at} startedAt={t0} /> },
       { key: 'text', content: <Text>{s.text}</Text> },
     ],
   }));

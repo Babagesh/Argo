@@ -3,8 +3,6 @@ import api, { fetch, route } from '@forge/api';
 
 const resolver = new Resolver();
 
-resolver.define('ping', () => ({ ok: true }));
-
 // Meetings live in the SpacetimeDB module (../spacetimedb), reached over its HTTP routes.
 // Set with: forge variables set ARGO_API_BASE <url> / forge variables set --encrypt ARGO_API_KEY <secret>
 async function callMeetingsApi(path: string): Promise<unknown> {

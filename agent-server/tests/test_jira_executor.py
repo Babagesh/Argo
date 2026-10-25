@@ -369,6 +369,20 @@ def test_sprint_moves_reject_foreign_keys_and_respect_dry_run(jira):
     assert not jira.mutations()
 
 
+def test_snapshot_context_lists_tickets_and_team(jira):
+    async def go():
+        async with JiraClient(
+            "https://example.atlassian.net", "me@x.com", "tok", "SCRUM",
+            transport=httpx.MockTransport(jira),
+        ) as client:
+            return await client.snapshot_context()
+
+    ctx = asyncio.run(go())
+    assert ctx["known_issue_keys"] == ["SCRUM-3"]
+    assert ctx["statuses"] == ["To Do"]  # the fake has no statuses endpoint, so it falls back
+    assert "Sam Rivera" in ctx["team_members"]
+
+
 def test_clarification_plan_does_nothing(jira):
     p = plan(intent="clarify", needs_clarification=True, clarification_question="Which ticket?")
     result = run(p, jira)

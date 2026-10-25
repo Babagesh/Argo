@@ -117,6 +117,13 @@ const unauthorized = (ctx: Ctx, req: Req) => {
   return !expected || req.headers.get('x-api-key') !== expected;
 };
 
+// The handler type isn't exported; it is the last parameter of httpHandler's (opts, fn) overload.
+type Handler = Parameters<typeof spacetimedb.httpHandler>[1];
+const authedHandler = (handler: Handler) =>
+  spacetimedb.httpHandler((ctx, req) =>
+    unauthorized(ctx, req) ? fail(401, 'Missing or invalid x-api-key') : handler(ctx, req),
+  );
+
 const readBody = (req: Req): any | null => {
   try {
     return req.json();
@@ -202,8 +209,7 @@ const toMeeting = (m: any, actions: any[], commands: any[], now: Timestamp) => {
 // ---------------------------------------------------------------------------
 
 // GET /meetings -> Meeting[] (newest first)
-export const listMeetings = spacetimedb.httpHandler((ctx, req) => {
-  if (unauthorized(ctx, req)) return fail(401, 'Missing or invalid x-api-key');
+export const listMeetings = authedHandler((ctx, req) => {
   const out = ctx.withTx((tx) =>
     [...tx.db.meeting.iter()]
       .sort((a, b) => (a.started_at.microsSinceUnixEpoch < b.started_at.microsSinceUnixEpoch ? 1 : -1))
@@ -215,8 +221,7 @@ export const listMeetings = spacetimedb.httpHandler((ctx, req) => {
 });
 
 // GET /meeting?id=<id> -> Meeting
-export const getMeeting = spacetimedb.httpHandler((ctx, req) => {
-  if (unauthorized(ctx, req)) return fail(401, 'Missing or invalid x-api-key');
+export const getMeeting = authedHandler((ctx, req) => {
   const id = query(req).get('id');
   if (!id) return fail(400, 'Missing id');
   const out = ctx.withTx((tx) => {
@@ -229,8 +234,7 @@ export const getMeeting = spacetimedb.httpHandler((ctx, req) => {
 });
 
 // GET /transcript?id=<meeting id> -> { at, text }[]
-export const getTranscript = spacetimedb.httpHandler((ctx, req) => {
-  if (unauthorized(ctx, req)) return fail(401, 'Missing or invalid x-api-key');
+export const getTranscript = authedHandler((ctx, req) => {
   const id = query(req).get('id');
   if (!id) return fail(400, 'Missing id');
   const out = ctx.withTx((tx) =>
@@ -240,8 +244,7 @@ export const getTranscript = spacetimedb.httpHandler((ctx, req) => {
 });
 
 // GET /issue-actions?key=KAN-1 -> AgentAction[] (for the Jira issue panel)
-export const issueActions = spacetimedb.httpHandler((ctx, req) => {
-  if (unauthorized(ctx, req)) return fail(401, 'Missing or invalid x-api-key');
+export const issueActions = authedHandler((ctx, req) => {
   const key = query(req).get('key');
   if (!key) return fail(400, 'Missing key');
   const out = ctx.withTx((tx) => [...tx.db.agent_action.by_issue.filter(key)].sort(byTime).map(toAction));
@@ -254,8 +257,7 @@ export const issueActions = spacetimedb.httpHandler((ctx, req) => {
 
 // POST /meetings -> create or update a meeting by id. Called at process start
 // ({id, title, status: "live"}) and again at the end ({id, status: "complete", endedAt, summary, ...}).
-export const saveMeeting = spacetimedb.httpHandler((ctx, req) => {
-  if (unauthorized(ctx, req)) return fail(401, 'Missing or invalid x-api-key');
+export const saveMeeting = authedHandler((ctx, req) => {
   const body = readBody(req);
   const id = str(body?.id).trim();
   if (!id) return fail(400, 'id is required');
@@ -291,8 +293,7 @@ export const saveMeeting = spacetimedb.httpHandler((ctx, req) => {
 });
 
 // POST /segments -> {meetingId, text, at?}
-export const saveSegment = spacetimedb.httpHandler((ctx, req) => {
-  if (unauthorized(ctx, req)) return fail(401, 'Missing or invalid x-api-key');
+export const saveSegment = authedHandler((ctx, req) => {
   const body = readBody(req);
   const meetingId = str(body?.meetingId).trim();
   const text = str(body?.text).trim();
@@ -306,8 +307,7 @@ export const saveSegment = spacetimedb.httpHandler((ctx, req) => {
 });
 
 // POST /commands -> {meetingId, utteranceId, transcript, intent?, confidence?, outcome?, spokenReply?, plan?, at?}
-export const saveCommand = spacetimedb.httpHandler((ctx, req) => {
-  if (unauthorized(ctx, req)) return fail(401, 'Missing or invalid x-api-key');
+export const saveCommand = authedHandler((ctx, req) => {
   const body = readBody(req);
   const meetingId = str(body?.meetingId).trim();
   const utteranceId = str(body?.utteranceId).trim();
@@ -338,8 +338,7 @@ export const saveCommand = spacetimedb.httpHandler((ctx, req) => {
 });
 
 // POST /actions -> one Jira operation performed for a command
-export const saveAction = spacetimedb.httpHandler((ctx, req) => {
-  if (unauthorized(ctx, req)) return fail(401, 'Missing or invalid x-api-key');
+export const saveAction = authedHandler((ctx, req) => {
   const body = readBody(req);
   const meetingId = str(body?.meetingId).trim();
   const kind = str(body?.kind);

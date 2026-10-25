@@ -7,7 +7,6 @@ calling Jira Cloud REST v3.
 
 from __future__ import annotations
 
-from copy import deepcopy
 from typing import Any
 
 SCHEMA_VERSION = "1.0"
@@ -243,17 +242,6 @@ OPERATION_TEMPLATES: dict[str, dict[str, Any]] = {
     "assign_issue": ASSIGN_ISSUE_TEMPLATE,
     "move_to_sprint": MOVE_TO_SPRINT_TEMPLATE,
     "move_to_backlog": MOVE_TO_BACKLOG_TEMPLATE,
-}
-
-PLAN_ENVELOPE_TEMPLATE: dict[str, Any] = {
-    "schema_version": SCHEMA_VERSION,
-    "source": {"transcript": "RAW_STT_TEXT", "utterance_id": None},
-    "intent": "update_issue",
-    "confidence": 0.0,
-    "needs_clarification": False,
-    "clarification_question": None,
-    "spoken_reply": "Short confirmation the voice agent can read aloud.",
-    "operations": [deepcopy(UPDATE_ISSUE_TEMPLATE)],
 }
 
 # Anthropic tool input_schema for forced structured output.
