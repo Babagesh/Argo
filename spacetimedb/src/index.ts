@@ -126,7 +126,23 @@ const readBody = (req: Req): any | null => {
 };
 
 // The beta Router has no path parameters, so ids travel in the query string.
-const query = (req: Req) => new URL(req.uri, 'http://argo.local').searchParams;
+// SpacetimeDB's JS runtime has no URL / URLSearchParams globals, so parse by hand.
+const query = (req: Req) => {
+  const q = req.uri.indexOf('?');
+  const params = new Map<string, string>();
+  for (const pair of (q < 0 ? '' : req.uri.slice(q + 1)).split('&')) {
+    if (!pair) continue;
+    const eq = pair.indexOf('=');
+    const rawKey = eq < 0 ? pair : pair.slice(0, eq);
+    const rawVal = eq < 0 ? '' : pair.slice(eq + 1);
+    try {
+      params.set(decodeURIComponent(rawKey.replace(/\+/g, ' ')), decodeURIComponent(rawVal.replace(/\+/g, ' ')));
+    } catch {
+      params.set(rawKey, rawVal); // malformed %-escape: keep it raw
+    }
+  }
+  return { get: (name: string): string | null => params.get(name) ?? null };
+};
 
 const str = (v: unknown, fallback = '') => (typeof v === 'string' ? v : fallback);
 const strList = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
