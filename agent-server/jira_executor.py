@@ -19,6 +19,7 @@ import sys
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -44,6 +45,8 @@ REQUIRED_FIELDS = {"summary", "project", "issuetype"}
 UNASSIGN_WORDS = {"none", "nobody", "noone", "unassigned", "unassign"}
 DRY_RUN_NEW_KEY = "<new issue>"
 DEFAULT_AUDIT_LOG = Path(__file__).with_name("audit.jsonl")
+# (op, result, pre_state, request, dry_run) -> None
+ActionCallback = Callable[[dict[str, Any], "OpResult", Any, Any, bool], None]
 
 
 @dataclass
@@ -133,12 +136,14 @@ class _PlanRun:
         dry_run: bool,
         allow_delete: bool,
         audit_log: Path | None,
+        on_action: ActionCallback | None = None,
     ) -> None:
         self.plan = plan
         self.client = client
         self.dry_run = dry_run
         self.allow_delete = allow_delete
         self.audit_log = audit_log
+        self.on_action = on_action
         self.last_key: str | None = None
         self.last_search: list[dict[str, Any]] | None = None
         self.key_re = re.compile(rf"^{re.escape(client.project_key)}-\d+$")
@@ -219,6 +224,12 @@ class _PlanRun:
         return await self.client.get_issue_brief(key)
 
     def _audit(self, op: dict[str, Any], result: OpResult, pre_state: Any, request: Any) -> None:
+        if self.on_action:
+            # Runs for dry runs too, so a demo without real Jira changes is still recorded.
+            try:
+                self.on_action(op, result, pre_state, request, self.dry_run)
+            except Exception as exc:  # recording must never break execution
+                print(f"[on_action] {exc}", file=sys.stderr)
         if self.dry_run or not self.audit_log:
             return
         source = self.plan.get("source") or {}
@@ -564,8 +575,13 @@ async def execute_plan(
     dry_run: bool | None = None,
     allow_delete: bool | None = None,
     audit_log: Path | None = DEFAULT_AUDIT_LOG,
+    on_action: ActionCallback | None = None,
 ) -> ExecutionResult:
-    """Run `plan["operations"]` in order; stop at the first failure."""
+    """Run `plan["operations"]` in order; stop at the first failure.
+
+    `on_action(op, result, pre_state, request, dry_run)` is called once per
+    mutating operation (see meeting_session.MeetingSession.action_recorder).
+    """
     load_dotenv()
     run = _PlanRun(
         plan,
@@ -573,6 +589,7 @@ async def execute_plan(
         dry_run=_env_flag("JIRA_DRY_RUN") if dry_run is None else dry_run,
         allow_delete=_env_flag("ALLOW_DELETE") if allow_delete is None else allow_delete,
         audit_log=audit_log,
+        on_action=on_action,
     )
     return await run.run()
 

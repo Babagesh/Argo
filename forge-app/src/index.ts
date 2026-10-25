@@ -1,19 +1,30 @@
 import Resolver from '@forge/resolver';
-import api, { route } from '@forge/api';
-import { MOCK_MEETINGS } from './mockData';
+import api, { fetch, route } from '@forge/api';
 
 const resolver = new Resolver();
 
 resolver.define('ping', () => ({ ok: true }));
 
-// Swap these for Forge storage (@forge/kvs) or the agent server when the backend exists.
-resolver.define('getMeetings', () => MOCK_MEETINGS);
+// Meetings live in the SpacetimeDB module (../spacetimedb), reached over its HTTP routes.
+// Set with: forge variables set ARGO_API_BASE <url> / forge variables set --encrypt ARGO_API_KEY <secret>
+async function callMeetingsApi(path: string): Promise<unknown> {
+  const base = process.env.ARGO_API_BASE;
+  const key = process.env.ARGO_API_KEY;
+  if (!base || !key) {
+    throw new Error('The meetings API is not configured. Set ARGO_API_BASE and ARGO_API_KEY with `forge variables set`, then redeploy.');
+  }
+  const res = await fetch(`${base.replace(/\/$/, '')}${path}`, { headers: { 'x-api-key': key } });
+  if (!res.ok) throw new Error(`The meetings API returned ${res.status}`);
+  return res.json();
+}
 
-resolver.define('getMeeting', ({ payload }) => {
-  const meeting = MOCK_MEETINGS.find((m) => m.id === payload.id);
-  if (!meeting) throw new Error('Meeting not found');
-  return meeting;
-});
+resolver.define('getMeetings', () => callMeetingsApi('/meetings'));
+
+resolver.define('getMeeting', ({ payload }) => callMeetingsApi(`/meeting?id=${encodeURIComponent(payload.id)}`));
+
+resolver.define('getIssueActions', ({ payload }) =>
+  callMeetingsApi(`/issue-actions?key=${encodeURIComponent(payload.key)}`),
+);
 
 // Lists projects the current user can see, for choosing where to create tickets.
 resolver.define('getProjects', async () => {
