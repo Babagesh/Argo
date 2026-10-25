@@ -1,28 +1,38 @@
 import React, { useEffect, useState } from 'react';
 import ForgeReconciler, { Lozenge, SectionMessage, Spinner, Stack, Text, useProductContext } from '@forge/react';
 import { invoke, view } from '@forge/bridge';
-import type { Meeting } from '../mockData';
+import type { AgentAction } from '../types';
 
 function Panel() {
   const context = useProductContext();
-  const [meetings, setMeetings] = useState<Meeting[] | null>(null);
+  const [actions, setActions] = useState<AgentAction[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const issueKey = (context?.extension as { issue?: { key?: string } } | undefined)?.issue?.key;
 
   useEffect(() => {
     void view.theme.enable();
-    (invoke('getMeetings') as Promise<Meeting[]>).then(setMeetings);
   }, []);
 
-  const issueKey = (context?.extension as { issue?: { key?: string } } | undefined)?.issue?.key;
-  if (!meetings || !issueKey) return <Spinner />;
+  useEffect(() => {
+    if (!issueKey) return;
+    (invoke('getIssueActions', { key: issueKey }) as Promise<AgentAction[]>)
+      .then(setActions)
+      .catch((e: Error) => setError(e.message));
+  }, [issueKey]);
 
-  const actions = meetings.flatMap((m) =>
-    m.actions.filter((a) => a.issueKey === issueKey).map((a) => ({ ...a, meeting: m.title })),
-  );
+  if (error)
+    return (
+      <SectionMessage appearance="error" title="Could not load Argo activity">
+        <Text>{error}</Text>
+      </SectionMessage>
+    );
+  if (!actions || !issueKey) return <Spinner />;
 
   if (actions.length === 0)
     return (
       <SectionMessage appearance="information" title="No meeting activity">
-        <Text>{`Argo's agent hasn't acted on ${issueKey} from any meeting yet.`}</Text>
+        <Text>{`Argo hasn't acted on ${issueKey} from any meeting yet.`}</Text>
       </SectionMessage>
     );
 
@@ -30,8 +40,10 @@ function Panel() {
     <Stack space="space.100">
       {actions.map((a) => (
         <Stack key={a.id} space="space.050">
-          <Text>{`${a.kind}: ${a.title}`}</Text>
-          <Lozenge>{a.meeting}</Lozenge>
+          <Text>{`${a.kind}: ${a.title || a.issueKey}`}</Text>
+          <Lozenge appearance={a.status === 'failed' ? 'removed' : a.status === 'done' ? 'success' : 'default'}>
+            {a.status.replace('_', ' ')}
+          </Lozenge>
         </Stack>
       ))}
     </Stack>

@@ -37,6 +37,9 @@ import sounddevice as sd
 import websockets
 from dotenv import load_dotenv
 
+from argo_api import ArgoAPI
+from meeting_session import OUTCOME_BY_STATUS, MeetingSession
+
 SAMPLE_RATE = 16000
 CHUNK_MS = 100
 FRAMES_PER_CHUNK = SAMPLE_RATE * CHUNK_MS // 1000
@@ -300,7 +303,7 @@ class ArgoListener:
         print(f"[wake] heard '{self.wake_phrase}' — waiting until the thought ends", flush=True)
 
 
-async def stream_meeting(device, wake_phrase: str, verbose: bool) -> None:
+async def stream_meeting(device, wake_phrase: str, verbose: bool, session: MeetingSession) -> None:
     load_dotenv()
     api_key = os.getenv("CARTESIA_API_KEY")
     if not api_key:
@@ -423,6 +426,8 @@ async def stream_meeting(device, wake_phrase: str, verbose: bool) -> None:
                     except json.JSONDecodeError:
                         print(f"[stt] non-json: {raw!r}", file=sys.stderr)
                         continue
+                    if event.get("type") == "turn.end":
+                        session.record_segment(event.get("transcript") or "")
                     command = listener.on_event(event)
                     if command == "" and listener.followup_active:
                         if followup_task and not followup_task.done():
@@ -435,6 +440,9 @@ async def stream_meeting(device, wake_phrase: str, verbose: bool) -> None:
                         followup_task = None
                     if command is not None:
                         print("[claude] planning Jira operation...", flush=True)
+                        # Save the command now, before Claude or Jira run, tied to this meeting.
+                        utterance_id = session.next_utterance_id()
+                        session.command_heard(utterance_id, command)
                         try:
                             choices = [
                                 phrase
@@ -453,7 +461,12 @@ async def stream_meeting(device, wake_phrase: str, verbose: bool) -> None:
                                 "known_issue_keys": [os.getenv("JIRA_CURRENT_ISSUE")] if os.getenv("JIRA_CURRENT_ISSUE") else [],
                             }
                             planning = asyncio.create_task(
-                                asyncio.to_thread(plan_from_transcript, command, context=context)
+                                asyncio.to_thread(
+                                    plan_from_transcript,
+                                    command,
+                                    context=context,
+                                    utterance_id=utterance_id,
+                                )
                             )
                             try:
                                 await asyncio.to_thread(speak_with_cartesia, acknowledgement)
@@ -465,6 +478,7 @@ async def stream_meeting(device, wake_phrase: str, verbose: bool) -> None:
                             if plan.get("needs_clarification") or plan.get("validation_errors"):
                                 print("[jira] skipped: Claude needs clarification or returned an invalid plan", flush=True)
                                 reply = plan.get("spoken_reply") or plan.get("clarification_question") or "I need a clearer Jira request."
+                                session.command_done(utterance_id, command, plan=plan, outcome="clarify", spoken_reply=reply)
                                 print(f"[spoken result] {reply}", flush=True)
                                 try:
                                     await asyncio.to_thread(speak_with_cartesia, reply)
@@ -474,6 +488,7 @@ async def stream_meeting(device, wake_phrase: str, verbose: bool) -> None:
                             if not plan.get("operations"):
                                 print("[jira] no operations to execute", flush=True)
                                 reply = plan.get("spoken_reply") or "I don't have a Jira action to run."
+                                session.command_done(utterance_id, command, plan=plan, outcome="no_op", spoken_reply=reply)
                                 print(f"[spoken result] {reply}", flush=True)
                                 try:
                                     await asyncio.to_thread(speak_with_cartesia, reply)
@@ -489,7 +504,10 @@ async def stream_meeting(device, wake_phrase: str, verbose: bool) -> None:
                                 "0", "false", "no", "off"
                             }
                             execution = await asyncio.to_thread(
-                                execute_plan_sync, plan, dry_run=dry_run
+                                execute_plan_sync,
+                                plan,
+                                dry_run=dry_run,
+                                on_action=session.action_recorder(utterance_id),
                             )
                             print("[jira execution]")
                             print(
@@ -502,12 +520,20 @@ async def stream_meeting(device, wake_phrase: str, verbose: bool) -> None:
                                     "Dry run only. No Jira changes were made. "
                                     + (plan.get("spoken_reply") or reply)
                                 )
+                            session.command_done(
+                                utterance_id,
+                                command,
+                                plan=plan,
+                                outcome=OUTCOME_BY_STATUS.get(execution.status, "failed"),
+                                spoken_reply=reply,
+                            )
                             print(f"[spoken result] {reply}", flush=True)
                             try:
                                 await asyncio.to_thread(speak_with_cartesia, reply)
                             except Exception as exc:
                                 print(f"[tts error] {exc}", file=sys.stderr, flush=True)
                         except Exception as exc:
+                            session.command_done(utterance_id, command, plan=None, outcome="error", spoken_reply=str(exc))
                             print(f"[agent error] {exc}", file=sys.stderr, flush=True)
 
             sender = asyncio.create_task(send_audio())
@@ -551,6 +577,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print every Cartesia turn event, including non-wake speech.",
     )
+    parser.add_argument(
+        "--title",
+        default=None,
+        help="Meeting title saved with this session (default: 'Meeting <date time>').",
+    )
     return parser.parse_args()
 
 
@@ -561,10 +592,16 @@ def main() -> None:
         return
 
     device = resolve_device(args.device)
+    load_dotenv()
+    # Starting the process starts a new meeting; stopping it summarizes and closes it.
+    session = MeetingSession(ArgoAPI.from_env(), title=args.title)
+    session.start()
     try:
-        asyncio.run(stream_meeting(device, args.wake_word.lower(), args.verbose))
+        asyncio.run(stream_meeting(device, args.wake_word.lower(), args.verbose, session))
     except KeyboardInterrupt:
         print("\n[exit] stopped", flush=True)
+    finally:
+        session.finish()
 
 
 if __name__ == "__main__":
