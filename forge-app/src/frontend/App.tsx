@@ -154,43 +154,49 @@ function MeetingList({ meetings, onOpen }: { meetings: Meeting[]; onOpen: (id: s
   const [filter, setFilter] = useState<'all' | 'week' | 'live'>('all');
   const [sort, setSort] = useState(SORT_OPTIONS[0]);
 
-  const visible = useMemo(
-    () =>
-      meetings
-        .filter((m) => m.title.toLowerCase().includes(query.toLowerCase()))
-        .filter((m) => filter !== 'week' || Date.now() - new Date(m.startedAt).getTime() <= 7 * 864e5)
-        .filter((m) => filter !== 'live' || m.status === 'live')
-        .sort((a, b) =>
-          sort.value === 'actions'
-            ? b.actions.length - a.actions.length
-            : sort.value === 'commands'
-              ? b.commands.length - a.commands.length
-              : b.startedAt.localeCompare(a.startedAt),
-        ),
-    [meetings, query, filter, sort],
-  );
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const newestFirst = (a: Meeting, b: Meeting) => b.startedAt.localeCompare(a.startedAt);
+    // Counts tie a lot (many meetings have 0 changes), so ties fall back to newest first.
+    const byCount = (count: (m: Meeting) => number) => (a: Meeting, b: Meeting) =>
+      count(b) - count(a) || newestFirst(a, b);
+    const compare =
+      sort.value === 'actions'
+        ? byCount((m) => m.actions.length)
+        : sort.value === 'commands'
+          ? byCount((m) => m.commands.length)
+          : newestFirst;
+
+    return meetings
+      .filter((m) => !q || m.title.toLowerCase().includes(q) || m.summary.toLowerCase().includes(q))
+      .filter((m) => filter !== 'week' || Date.now() - new Date(m.startedAt).getTime() <= 7 * 864e5)
+      .filter((m) => filter !== 'live' || m.status === 'live')
+      .sort(compare);
+  }, [meetings, query, filter, sort]);
 
   const totalCommands = meetings.reduce((n, m) => n + m.commands.length, 0);
   const totalActions = meetings.reduce((n, m) => n + m.actions.length, 0);
   const liveNow = meetings.filter((m) => m.status === 'live').length;
 
+  // DynamicTable identifies a column by its head key and wants every row cell's key to be
+  // unique within that column, so cell keys below are `<column>-<meeting id>`.
   const head = {
     cells: [
-      cell('Meeting', 22),
-      cell('Started', 16),
-      cell('Length', 9),
-      cell('Status', 10),
-      cell('Commands', 9),
-      cell('Jira changes', 10),
-      cell('Summary', 24),
+      { key: 'title', content: 'Meeting', width: 22 },
+      { key: 'started', content: 'Started', width: 16 },
+      { key: 'length', content: 'Length', width: 9 },
+      { key: 'status', content: 'Status', width: 10 },
+      { key: 'commands', content: 'Commands', width: 9 },
+      { key: 'actions', content: 'Jira changes', width: 10 },
+      { key: 'summary', content: 'Summary', width: 24 },
     ],
   };
   const rows = visible.map((m) => ({
     key: m.id,
     cells: [
-      { key: 'title', content: <Button appearance="subtle" onClick={() => onOpen(m.id)}>{m.title}</Button> },
+      { key: `title-${m.id}`, content: <Button appearance="subtle" onClick={() => onOpen(m.id)}>{m.title}</Button> },
       {
-        key: 'started',
+        key: `started-${m.id}`,
         content: (
           <Stack space="space.025">
             <Text weight="medium">{formatDate(m.startedAt)}</Text>
@@ -198,12 +204,12 @@ function MeetingList({ meetings, onOpen }: { meetings: Meeting[]; onOpen: (id: s
           </Stack>
         ),
       },
-      { key: 'length', content: formatDuration(m.durationSec) },
-      { key: 'status', content: <StatusLozenge status={m.status} /> },
-      { key: 'commands', content: String(m.commands.length) },
-      { key: 'actions', content: String(m.actions.length) },
+      { key: `length-${m.id}`, content: formatDuration(m.durationSec) },
+      { key: `status-${m.id}`, content: <StatusLozenge status={m.status} /> },
+      { key: `commands-${m.id}`, content: String(m.commands.length) },
+      { key: `actions-${m.id}`, content: String(m.actions.length) },
       {
-        key: 'summary',
+        key: `summary-${m.id}`,
         content: (
           <Text maxLines={2} color="color.text.subtle">
             {m.summary || (m.status === 'live' ? 'In progress…' : 'No summary')}
@@ -244,6 +250,9 @@ function MeetingList({ meetings, onOpen }: { meetings: Meeting[]; onOpen: (id: s
           <TabPanel>{null}</TabPanel>
           <TabPanel>{null}</TabPanel>
         </Tabs>
+        <Text size="small" color="color.text.subtle">
+          {`Showing ${visible.length} of ${meetings.length} meetings · ${sort.label}`}
+        </Text>
         {visible.length === 0 ? (
           <SectionMessage title={meetings.length === 0 ? 'No meetings yet' : 'No meetings match'} appearance="information">
             <Text>
@@ -253,7 +262,9 @@ function MeetingList({ meetings, onOpen }: { meetings: Meeting[]; onOpen: (id: s
             </Text>
           </SectionMessage>
         ) : (
-          <DynamicTable head={head} rows={rows} rowsPerPage={10} />
+          // The key remounts the table when the order or filter changes, so it always shows the new
+          // order from page 1 instead of keeping its own previous page or row order.
+          <DynamicTable key={`${sort.value}|${filter}|${query}`} head={head} rows={rows} rowsPerPage={10} />
         )}
       </Card>
     </Stack>
