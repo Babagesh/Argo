@@ -58,6 +58,9 @@ TURN_END_TIMEOUT_MS = 8000
 TURN_END_THRESHOLD = 0.1
 TURN_EAGER_END_THRESHOLD = 0.3
 TURN_START_THRESHOLD = 0.8
+FOLLOWUP_PROMPT_DELAY_SECONDS = 3
+FOLLOWUP_LISTEN_SECONDS = 15
+FOLLOWUP_PROMPT = "I didn't hear a request. What would you like me to do?"
 
 
 def list_devices() -> None:
@@ -137,7 +140,9 @@ def speak_with_cartesia(text: str) -> None:
         },
         json={
             "model_id": os.getenv("CARTESIA_TTS_MODEL", "sonic-3.6"),
-            "transcript": text,
+            # Quotes around Jira summaries can make a trailing number look
+            # like an inches value to TTS (for example, `"new issue 3"`).
+            "transcript": re.sub(r'[\"“”]', "", text),
             "voice": os.getenv(
                 "CARTESIA_TTS_VOICE_ID", "db6b0ed5-d5d3-463d-ae85-518a07d3c2b4"
             ),
@@ -200,6 +205,9 @@ class ArgoListener:
         self.verbose = verbose
         self.awaiting_command = False
         self.armed_command = ""
+        self.followup_active = False
+        self.followup_prompting = False
+        self.user_speaking = False
 
     def on_event(self, event: dict) -> str | None:
         kind = event.get("type")
@@ -213,9 +221,14 @@ class ArgoListener:
             print(f"  ({kind}{extra})")
 
         if kind == "turn.start":
+            self.user_speaking = True
             return None
 
         if kind in {"turn.update", "turn.eager_end"}:
+            if self.followup_active:
+                if transcript:
+                    print(f"[partial] {transcript}", flush=True)
+                return None
             self._maybe_arm(transcript)
             if self.awaiting_command and transcript:
                 shown = command_after_wake(transcript, self.wake_re)
@@ -226,6 +239,31 @@ class ArgoListener:
             return None
 
         if kind == "turn.end":
+            self.user_speaking = False
+            if self.followup_active:
+                if self.followup_prompting:
+                    return None
+                # BlackHole may feed Argo's own spoken prompt back into STT.
+                normalized = re.sub(r"[^a-z]", "", transcript.lower())
+                if "whatwouldyoulikemetodo" in normalized:
+                    print("[follow-up] ignoring Argo's prompt audio", flush=True)
+                    return None
+                command = command_after_wake(transcript, self.wake_re)
+                if command is None:
+                    command = transcript
+                command = (command or "").strip()
+                if not command:
+                    print("[follow-up] still waiting for a request", flush=True)
+                    return ""
+                self.followup_active = False
+                self.awaiting_command = False
+                self.armed_command = ""
+                print("-" * 60)
+                print("[argo follow-up command]")
+                print(command)
+                print("-" * 60, flush=True)
+                return command
+
             self._maybe_arm(transcript)
             if not self.awaiting_command:
                 return
@@ -239,8 +277,16 @@ class ArgoListener:
             print("-" * 60, flush=True)
             self.awaiting_command = False
             self.armed_command = ""
+            if not command:
+                self.followup_active = True
+                print(
+                    f"[follow-up] no request yet; I'll ask in {FOLLOWUP_PROMPT_DELAY_SECONDS}s "
+                    f"and listen for {FOLLOWUP_LISTEN_SECONDS}s",
+                    flush=True,
+                )
+                return ""
             print(f"[idle] say '{self.wake_phrase}, ...' to address Argo", flush=True)
-            return command or ""
+            return command
         return None
 
     def _maybe_arm(self, transcript: str) -> None:
@@ -341,6 +387,34 @@ async def stream_meeting(device, wake_phrase: str, verbose: bool) -> None:
 
             async def recv_events() -> None:
                 previous_acknowledgement = None
+                followup_task: asyncio.Task | None = None
+
+                async def prompt_for_followup() -> None:
+                    await asyncio.sleep(FOLLOWUP_PROMPT_DELAY_SECONDS)
+                    if not listener.followup_active or listener.user_speaking:
+                        return
+
+                    print(f"[spoken follow-up] {FOLLOWUP_PROMPT}", flush=True)
+                    listener.followup_prompting = True
+                    try:
+                        await asyncio.to_thread(speak_with_cartesia, FOLLOWUP_PROMPT)
+                    except Exception as exc:
+                        print(f"[tts error] {exc}", file=sys.stderr, flush=True)
+                    finally:
+                        listener.followup_prompting = False
+
+                    deadline = asyncio.get_running_loop().time() + FOLLOWUP_LISTEN_SECONDS
+                    hard_deadline = deadline + TURN_END_TIMEOUT_MS / 1000 + 2
+                    while listener.followup_active:
+                        now = asyncio.get_running_loop().time()
+                        if now >= hard_deadline or (now >= deadline and not listener.user_speaking):
+                            break
+                        await asyncio.sleep(0.1)
+
+                    if listener.followup_active and not listener.user_speaking:
+                        listener.followup_active = False
+                        print("[follow-up] timed out; say the wake phrase to start again", flush=True)
+
                 async for raw in ws:
                     if isinstance(raw, bytes):
                         continue
@@ -350,10 +424,16 @@ async def stream_meeting(device, wake_phrase: str, verbose: bool) -> None:
                         print(f"[stt] non-json: {raw!r}", file=sys.stderr)
                         continue
                     command = listener.on_event(event)
+                    if command == "" and listener.followup_active:
+                        if followup_task and not followup_task.done():
+                            followup_task.cancel()
+                        followup_task = asyncio.create_task(prompt_for_followup())
+                        continue
+                    if command:
+                        if followup_task and not followup_task.done():
+                            followup_task.cancel()
+                        followup_task = None
                     if command is not None:
-                        if not command:
-                            print("[claude] skipped: wake phrase heard without a command", flush=True)
-                            continue
                         print("[claude] planning Jira operation...", flush=True)
                         try:
                             choices = [

@@ -492,6 +492,35 @@ class _PlanRun:
         self.last_key = key
         self._audit(op, result, pre, payload)
 
+    async def create_sprint(self, op: dict[str, Any], result: OpResult) -> None:
+        """Create a future sprint on the configured project's Scrum board."""
+        raw = (op.get("rest") or {}).get("body") or {}
+        name = str(raw.get("name") or "").strip()
+        if not name or is_placeholder(name):
+            raise _OpFailed("create_sprint needs a sprint name")
+
+        payload: dict[str, Any] = {
+            "name": name,
+            # Always resolve the board from our configured project; do not
+            # trust a board id supplied by the language model.
+            "originBoardId": await self.client.board_id(),
+        }
+        for field_name in ("goal", "startDate", "endDate"):
+            value = raw.get(field_name)
+            if value is not None and not is_placeholder(value):
+                payload[field_name] = value
+
+        method, path = REST_ROUTES["create_sprint"]
+        data = await self._send(method, path, result, body=payload)
+        result.detail = {
+            "id": (data or {}).get("id"),
+            "name": name,
+            "state": (data or {}).get("state") or "future",
+            "board_id": payload["originBoardId"],
+        }
+        result.spoken = f"created sprint {name}"
+        self._audit(op, result, None, payload)
+
     # -- driver -------------------------------------------------------------
 
     async def run(self) -> ExecutionResult:
@@ -535,7 +564,16 @@ class _PlanRun:
             if not result.ok:
                 self._audit(op, result, None, None)
 
-        done = [r.spoken for r in results if r.ok and r.spoken]
+        done = [
+            r.spoken
+            for index, r in enumerate(results)
+            if r.ok
+            and r.spoken
+            # A search immediately followed by another operation is just
+            # resolving the user's title reference. Speak the final action,
+            # not the intermediate "Found 1 ticket" result.
+            and not (r.op == "search_issues" and index < len(results) - 1)
+        ]
         spoken = _verb_list(done)
         if failure:
             spoken = (f"{spoken}, but " if spoken else "") + f"I couldn't finish: {failure}"

@@ -23,6 +23,7 @@ OPS = (
     "assign_issue",
     "move_to_sprint",
     "move_to_backlog",
+    "create_sprint",
 )
 
 # Agile ops that act on one issue but carry its key in body.issues, not the path.
@@ -42,6 +43,7 @@ REST_ROUTES = {
     "assign_issue": ("PUT", "/rest/api/3/issue/{issueIdOrKey}/assignee"),
     "move_to_sprint": ("POST", "/rest/agile/1.0/sprint/{sprintId}/issue"),
     "move_to_backlog": ("POST", "/rest/agile/1.0/backlog/issue"),
+    "create_sprint": ("POST", "/rest/agile/1.0/sprint"),
 }
 
 
@@ -232,6 +234,22 @@ MOVE_TO_BACKLOG_TEMPLATE: dict[str, Any] = {
     },
 }
 
+CREATE_SPRINT_TEMPLATE: dict[str, Any] = {
+    "op": "create_sprint",
+    "rest": {
+        "method": "POST",
+        "path": "/rest/agile/1.0/sprint",
+        "path_params": {},
+        "query": {},
+        "body": {
+            "name": "SPRINT_NAME",
+            "goal": "OPTIONAL_GOAL",
+            "startDate": "OPTIONAL_START_DATE",
+            "endDate": "OPTIONAL_END_DATE",
+        },
+    },
+}
+
 OPERATION_TEMPLATES: dict[str, dict[str, Any]] = {
     "create_issue": CREATE_ISSUE_TEMPLATE,
     "get_issue": GET_ISSUE_TEMPLATE,
@@ -243,6 +261,7 @@ OPERATION_TEMPLATES: dict[str, dict[str, Any]] = {
     "assign_issue": ASSIGN_ISSUE_TEMPLATE,
     "move_to_sprint": MOVE_TO_SPRINT_TEMPLATE,
     "move_to_backlog": MOVE_TO_BACKLOG_TEMPLATE,
+    "create_sprint": CREATE_SPRINT_TEMPLATE,
 }
 
 PLAN_ENVELOPE_TEMPLATE: dict[str, Any] = {
@@ -374,6 +393,10 @@ def validate_plan(plan: dict[str, Any]) -> list[str]:
                 errors.append(f"operations[{i}] create_issue needs fields.summary")
             if not (fields.get("issuetype") or {}).get("name"):
                 errors.append(f"operations[{i}] create_issue needs fields.issuetype.name")
+        if name == "create_sprint":
+            sprint_name = str(((rest.get("body") or {}).get("name") or "")).strip()
+            if not sprint_name or sprint_name == "SPRINT_NAME":
+                errors.append(f"operations[{i}] create_sprint needs a sprint name")
         if name == "transition_issue":
             has_id = ((rest.get("body") or {}).get("transition") or {}).get("id")
             has_name = (op.get("resolve") or {}).get("transition_name")

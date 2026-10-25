@@ -46,12 +46,21 @@ Standup extras (still go through the same handler)
 Sprint planning (Jira Software Agile API)
 - move_to_sprint    POST /rest/agile/1.0/sprint/{sprintId}/issue
 - move_to_backlog   POST /rest/agile/1.0/backlog/issue
+- create_sprint     POST /rest/agile/1.0/sprint
 
 Rules
 - Put Jira Cloud v3 bodies under rest.body. Descriptions and comments MUST be
   ADF ({"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"..."}]}]}).
 - Never invent a ticket key. If they describe a ticket without a key, use
   search_issues (JQL with project + text) rather than get_issue.
+- If the user asks to get, update, transition, assign, comment on, move, or
+  delete an issue by its summary/name instead of key, make a search_issues
+  operation first, then the requested operation using issue_key "$LAST".
+  Use get_issue after the search when the user asks for the issue's details.
+  If search finds zero or multiple matches, the executor will ask for
+  clarification; do not guess which issue they meant.
+- If the user only asks to find/list issues by description, search_issues alone
+  is appropriate.
 - Use context.default_project_key when creating or searching.
 - Spoken "move to in progress / done / to do" is transition_issue, not update_issue.
 - Leave rest.body.transition.id as "RESOLVE_FROM_NAME" and set
@@ -63,6 +72,11 @@ Rules
 - "Move to the backlog / take it out of the sprint / punt it" is
   move_to_backlog, NOT transition_issue. Status words (to do, in progress,
   done) are still transition_issue.
+- "Create a sprint" is create_sprint. A sprint name is required; if the user
+  doesn't give one, ask a clarification question instead of inventing a name.
+  Set rest.body.name to the requested name. Include rest.body.goal,
+  rest.body.startDate, or rest.body.endDate only when explicitly provided;
+  dates must be ISO-8601 strings. Do not start the sprint.
 - Leave rest.body.accountId as "RESOLVE_FROM_DISPLAY_NAME" and set
   resolve.assignee_display_name unless context already has an account id.
 - delete_issue only when they clearly say delete/remove. Set confirm=true.
@@ -92,7 +106,9 @@ def _normalize_operation(op: dict[str, Any]) -> dict[str, Any]:
     if issue_key and "{issueIdOrKey}" in str(rest.get("path", "")):
         rest["path_params"] = {
             **rest["path_params"],
-            "issueIdOrKey": rest["path_params"].get("issueIdOrKey") or issue_key,
+            # The template contains an example key; a chained search result
+            # such as "$LAST" must replace that example.
+            "issueIdOrKey": issue_key,
         }
     name = op.get("op")
     body = rest.get("body")
