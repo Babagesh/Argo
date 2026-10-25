@@ -6,6 +6,8 @@ modules:
       resolver:
         function: ui-resolver
       title: Argo
+      # Icons must be absolute URLs; the repo is public, so GitHub's raw link serves the file.
+      icon: https://raw.githubusercontent.com/Babagesh/Scrummy/main/forge-app/assets/argo-logo.png
   jira:issuePanel:
     - key: scrumpulse-provenance-panel
       resource: panel
@@ -13,7 +15,7 @@ modules:
       resolver:
         function: ui-resolver
       title: Argo Meeting Provenance
-      icon: https://developer.atlassian.com/platform/forge/images/icons/issue-panel-icon.svg
+      icon: https://raw.githubusercontent.com/Babagesh/Scrummy/main/forge-app/assets/argo-logo.png
   webtrigger:
     - key: agent-action-webhook
       function: webhook-handler
