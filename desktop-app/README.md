@@ -4,7 +4,7 @@ Argo is a native macOS app for connecting the voice agent to Cartesia, Claude, a
 
 ## Build and open
 
-From the Scrummy repository, run:
+From the Argo repository, run:
 
 ```sh
 ./desktop-app/build-app.sh

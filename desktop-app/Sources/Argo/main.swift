@@ -177,7 +177,7 @@ final class ArgoModel: ObservableObject {
         config.save()
 
         guard let agentDirectory = locateAgentDirectory() else {
-            errorMessage = "Argo's agent files could not be found. Rebuild the app from the Scrummy folder."
+            errorMessage = "Argo's agent files could not be found. Rebuild the app from the Argo folder."
             return
         }
         guard let pythonURL = locatePython(agentDirectory: agentDirectory) else {
