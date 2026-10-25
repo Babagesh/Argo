@@ -25,6 +25,8 @@ KIND_BY_OP = {
     "add_comment": "commented",
     "transition_issue": "transitioned",
     "assign_issue": "assigned",
+    "move_to_sprint": "moved",
+    "move_to_backlog": "moved",
     "update_issue": "updated",
     "delete_issue": "deleted",
     "get_issue": "searched",

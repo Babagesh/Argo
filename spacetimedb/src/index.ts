@@ -73,7 +73,7 @@ const agentAction = table(
     meeting_id: t.string(),
     utterance_id: t.string(), // links back to the command row
     op: t.string(), // create_issue, add_comment, ...
-    kind: t.string(), // created | commented | transitioned | assigned | updated | deleted | searched
+    kind: t.string(), // created | commented | transitioned | assigned | moved | updated | deleted | searched
     issue_key: t.string(),
     title: t.string(),
     detail: t.string(),
@@ -98,7 +98,7 @@ export default spacetimedb;
 type Ctx = HandlerContext<any>;
 type Req = { headers: { get(name: string): string | null }; uri: string; json(): any };
 
-const KINDS = ['created', 'commented', 'transitioned', 'assigned', 'updated', 'deleted', 'searched'];
+const KINDS = ['created', 'commented', 'transitioned', 'assigned', 'moved', 'updated', 'deleted', 'searched'];
 const ACTION_STATUSES = ['done', 'pending', 'failed', 'dry_run'];
 const MEETING_STATUSES = ['live', 'complete'];
 const OUTCOMES = ['pending', 'executed', 'partial', 'failed', 'clarify', 'dry_run', 'no_op', 'error'];

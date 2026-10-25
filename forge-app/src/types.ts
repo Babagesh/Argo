@@ -1,6 +1,14 @@
 // Shapes returned by the meetings API (see ../spacetimedb/src/index.ts, toMeeting/toAction/toCommand).
 
-export type ActionKind = 'created' | 'commented' | 'transitioned' | 'assigned' | 'updated' | 'deleted' | 'searched';
+export type ActionKind =
+  | 'created'
+  | 'commented'
+  | 'transitioned'
+  | 'assigned'
+  | 'moved'
+  | 'updated'
+  | 'deleted'
+  | 'searched';
 
 export interface AgentAction {
   id: string;
