@@ -23,12 +23,16 @@ from __future__ import annotations
 import argparse
 import array
 import asyncio
+import io
 import json
 import os
+import random
 import re
 import sys
+import wave
 from urllib.parse import urlencode
 
+import httpx
 import sounddevice as sd
 import websockets
 from dotenv import load_dotenv
@@ -40,6 +44,13 @@ LEVEL_EVERY_CHUNKS = 20  # ~2s at 100ms chunks
 STT_URL = "wss://api.cartesia.ai/stt/turns/websocket"
 CARTESIA_VERSION = "2026-08-14"
 DEFAULT_WAKE = "hey argo"
+ACKNOWLEDGEMENTS = (
+    "Okay, I'm on it.",
+    "Got it. Let me take care of that.",
+    "Sure, I'll check that now.",
+    "Understood. I'm working on it.",
+    "All right, give me a moment.",
+)
 
 # Patient-ish: meeting speech has pauses. Cartesia still emits turn.end when
 # the thought is actually done.
@@ -107,6 +118,48 @@ def peak_level(mono: bytes) -> float:
     if not samples:
         return 0.0
     return max(abs(s) for s in samples) / 32768.0
+
+
+def speak_with_cartesia(text: str) -> None:
+    """Synthesize a short reply with Cartesia and play it on the default output."""
+    if not text.strip():
+        return
+    api_key = os.getenv("CARTESIA_API_KEY")
+    if not api_key:
+        raise RuntimeError("Set CARTESIA_API_KEY to enable Cartesia speech output.")
+
+    response = httpx.post(
+        "https://api.cartesia.ai/tts/bytes",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Cartesia-Version": os.getenv("CARTESIA_TTS_VERSION", CARTESIA_VERSION),
+            "Content-Type": "application/json",
+        },
+        json={
+            "model_id": os.getenv("CARTESIA_TTS_MODEL", "sonic-3.6"),
+            "transcript": text,
+            "voice": os.getenv(
+                "CARTESIA_TTS_VOICE_ID", "db6b0ed5-d5d3-463d-ae85-518a07d3c2b4"
+            ),
+            "output_format": {
+                "container": "wav",
+                "encoding": "pcm_s16le",
+                "sample_rate": 44100,
+            },
+        },
+        timeout=30.0,
+    )
+    if not response.is_success:
+        raise RuntimeError(f"Cartesia TTS {response.status_code}: {response.text[:500]}")
+
+    with wave.open(io.BytesIO(response.content), "rb") as audio:
+        if audio.getnchannels() != 1 or audio.getsampwidth() != 2:
+            raise RuntimeError("Cartesia TTS returned unexpected WAV audio format.")
+        frames = audio.readframes(audio.getnframes())
+        with sd.RawOutputStream(
+            samplerate=audio.getframerate(), channels=1, dtype="int16"
+        ) as output:
+            output.write(frames)
 
 
 def wake_pattern(phrase: str) -> re.Pattern[str]:
@@ -287,6 +340,7 @@ async def stream_meeting(device, wake_phrase: str, verbose: bool) -> None:
                     await ws.send(chunk)
 
             async def recv_events() -> None:
+                previous_acknowledgement = None
                 async for raw in ws:
                     if isinstance(raw, bytes):
                         continue
@@ -302,6 +356,14 @@ async def stream_meeting(device, wake_phrase: str, verbose: bool) -> None:
                             continue
                         print("[claude] planning Jira operation...", flush=True)
                         try:
+                            choices = [
+                                phrase
+                                for phrase in ACKNOWLEDGEMENTS
+                                if phrase != previous_acknowledgement
+                            ]
+                            acknowledgement = random.choice(choices)
+                            previous_acknowledgement = acknowledgement
+                            print(f"[spoken acknowledgement] {acknowledgement}", flush=True)
                             from claude_jira import plan_from_transcript
 
                             context = {
@@ -310,13 +372,63 @@ async def stream_meeting(device, wake_phrase: str, verbose: bool) -> None:
                                 "current_issue_key": os.getenv("JIRA_CURRENT_ISSUE"),
                                 "known_issue_keys": [os.getenv("JIRA_CURRENT_ISSUE")] if os.getenv("JIRA_CURRENT_ISSUE") else [],
                             }
-                            plan = await asyncio.to_thread(
-                                plan_from_transcript, command, context=context
+                            planning = asyncio.create_task(
+                                asyncio.to_thread(plan_from_transcript, command, context=context)
                             )
-                            print("[claude result]")
+                            try:
+                                await asyncio.to_thread(speak_with_cartesia, acknowledgement)
+                            except Exception as exc:
+                                print(f"[tts error] {exc}", file=sys.stderr, flush=True)
+                            plan = await planning
+                            print("[claude plan]")
                             print(json.dumps(plan, indent=2, ensure_ascii=False), flush=True)
+                            if plan.get("needs_clarification") or plan.get("validation_errors"):
+                                print("[jira] skipped: Claude needs clarification or returned an invalid plan", flush=True)
+                                reply = plan.get("spoken_reply") or plan.get("clarification_question") or "I need a clearer Jira request."
+                                print(f"[spoken result] {reply}", flush=True)
+                                try:
+                                    await asyncio.to_thread(speak_with_cartesia, reply)
+                                except Exception as exc:
+                                    print(f"[tts error] {exc}", file=sys.stderr, flush=True)
+                                continue
+                            if not plan.get("operations"):
+                                print("[jira] no operations to execute", flush=True)
+                                reply = plan.get("spoken_reply") or "I don't have a Jira action to run."
+                                print(f"[spoken result] {reply}", flush=True)
+                                try:
+                                    await asyncio.to_thread(speak_with_cartesia, reply)
+                                except Exception as exc:
+                                    print(f"[tts error] {exc}", file=sys.stderr, flush=True)
+                                continue
+
+                            from jira_executor import execute_plan_sync
+
+                            # Voice commands run as dry runs by default. Set
+                            # JIRA_DRY_RUN=0 only when ready to make Jira changes.
+                            dry_run = os.getenv("JIRA_DRY_RUN", "1").strip().lower() not in {
+                                "0", "false", "no", "off"
+                            }
+                            execution = await asyncio.to_thread(
+                                execute_plan_sync, plan, dry_run=dry_run
+                            )
+                            print("[jira execution]")
+                            print(
+                                json.dumps(execution.to_dict(), indent=2, ensure_ascii=False),
+                                flush=True,
+                            )
+                            reply = execution.spoken_result or plan.get("spoken_reply") or "I couldn't complete that Jira request."
+                            if execution.status == "dry_run":
+                                reply = (
+                                    "Dry run only. No Jira changes were made. "
+                                    + (plan.get("spoken_reply") or reply)
+                                )
+                            print(f"[spoken result] {reply}", flush=True)
+                            try:
+                                await asyncio.to_thread(speak_with_cartesia, reply)
+                            except Exception as exc:
+                                print(f"[tts error] {exc}", file=sys.stderr, flush=True)
                         except Exception as exc:
-                            print(f"[claude error] {exc}", file=sys.stderr, flush=True)
+                            print(f"[agent error] {exc}", file=sys.stderr, flush=True)
 
             sender = asyncio.create_task(send_audio())
             receiver = asyncio.create_task(recv_events())
