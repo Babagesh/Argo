@@ -1,4 +1,4 @@
-# Argo (Scrummy)
+# Argo
 
 Argo turns meeting summaries into Jira actions. The UI lives inside Jira as a Forge app.
 
