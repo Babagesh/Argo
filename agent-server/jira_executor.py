@@ -259,6 +259,35 @@ class _PlanRun:
             return None, "nobody"
         return await self.client.account_id(name)
 
+    async def _check_assignees(self, operations: list[dict[str, Any]]) -> str | None:
+        """Resolve every spoken assignee up front; return a question if one is unsure.
+
+        Asking mid-plan would leave earlier ops (e.g. the create in "create X and
+        assign it to Jon") done, and the follow-up replans the whole request.
+        The client caches the user list, so handlers re-resolve without new calls.
+        """
+        for op in operations:
+            resolve = op.get("resolve") or {}
+            body = (op.get("rest") or {}).get("body") or {}
+            if op.get("op") == "assign_issue":
+                if resolve.get("assignee_account_id") or not is_placeholder(body.get("accountId")):
+                    continue
+                spoken = resolve.get("assignee_display_name")
+            elif op.get("op") in {"create_issue", "update_issue"}:
+                spoken = (body.get("fields") or {}).get("assignee")
+                if is_placeholder(spoken) and op.get("op") == "create_issue":
+                    spoken = resolve.get("assignee_display_name")
+            else:
+                continue
+            if is_placeholder(spoken):
+                continue
+            try:
+                await self._resolve_assignee(spoken)
+            except ResolutionError as exc:
+                if exc.question:
+                    return exc.question
+        return None
+
     def _clean_fields(self, fields: dict[str, Any], result: OpResult) -> dict[str, Any]:
         cleaned: dict[str, Any] = {}
         for name, value in (fields or {}).items():
@@ -546,9 +575,14 @@ class _PlanRun:
             )
 
         operations = self.plan.get("operations") or []
+        question = await self._check_assignees(operations)
+        if question:
+            return ExecutionResult(
+                status="clarify", clarification_question=question, spoken_result=question
+            )
+
         results: list[OpResult] = []
         failure: str | None = None
-        question: str | None = None
         for op in operations:
             name = op.get("op")
             result = OpResult(op=name)

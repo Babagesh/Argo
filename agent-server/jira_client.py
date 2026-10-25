@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import re
+from difflib import SequenceMatcher
 from typing import Any
 from urllib.parse import quote
 
@@ -28,6 +29,26 @@ _STATUS_SYNONYMS = (
 # Spoken sprint references that mean "whichever sprint is running" / "the one after".
 _ACTIVE_SPRINT_WORDS = {"", "active", "current", "this", "thissprint", "currentsprint", "activesprint"}
 _NEXT_SPRINT_WORDS = {"next", "nextsprint", "upcoming", "upcomingsprint"}
+
+# Fuzzy assignee matching: minimum score to suggest someone, and how close a
+# runner-up must be to be offered too. Equal sound-alike keys score PHONETIC_SCORE.
+FUZZY_MIN = 0.6
+FUZZY_TIE = 0.1
+PHONETIC_SCORE = 0.9
+# Spellings that sound the same, applied in order before vowels are dropped.
+_PHONETIC_RULES = (
+    (r"^kn", "n"),
+    (r"^wr", "r"),
+    (r"ph", "f"),
+    (r"ck", "k"),
+    (r"c(?=[eiy])", "s"),
+    (r"[cq]", "k"),
+    (r"x", "ks"),
+    (r"z", "s"),
+    (r"v", "f"),
+    (r"dg", "j"),
+    (r"gh", "g"),
+)
 
 
 class JiraError(Exception):
@@ -59,6 +80,33 @@ class ResolutionError(Exception):
 
 def norm(text: str | None) -> str:
     return re.sub(r"[^a-z0-9]", "", (text or "").lower())
+
+
+def _phonetic(text: str) -> str:
+    """Rough sound-alike key per word: "Jon"/"John" -> "jn", "Katelyn"/"Caitlin" -> "ktln"."""
+    keys = []
+    for word in (text or "").lower().split():
+        w = re.sub(r"[^a-z]", "", word)
+        for pattern, repl in _PHONETIC_RULES:
+            w = re.sub(pattern, repl, w)
+        if not w:
+            continue
+        # Keep the first letter, drop later vowels and silent-ish letters, collapse repeats.
+        key = w[0] + re.sub(r"[aeiouyhw]", "", w[1:])
+        keys.append(re.sub(r"(.)\1+", r"\1", key))
+    return " ".join(keys)
+
+
+def _name_score(spoken: str, display_name: str) -> float:
+    """0..1 similarity of a spoken name to a Jira display name or any part of it."""
+    wanted = norm(spoken)
+    sound = _phonetic(spoken)
+    best = 0.0
+    for part in [display_name, *display_name.split()]:
+        best = max(best, SequenceMatcher(None, wanted, norm(part)).ratio())
+        if sound and sound == _phonetic(part):
+            best = max(best, PHONETIC_SCORE)
+    return best
 
 
 def _synonym_group(word: str) -> set[str]:
@@ -269,7 +317,33 @@ class JiraClient:
                 f"{display_name!r} matches several people: {', '.join(candidates)}",
                 question=f"Which {display_name} do you mean: {', '.join(candidates)}?",
             )
-        raise ResolutionError(f"No assignable user in {self.project_key} named {display_name!r}")
+
+        # Speech-to-text spells names its own way ("Jon", "Katelyn"). Find people whose
+        # name looks or sounds close, but ask before acting on a guess.
+        scored = sorted(
+            (
+                (_name_score(display_name, u.get("displayName") or ""), u.get("displayName"))
+                for u in await self.assignable_users()
+            ),
+            key=lambda scored_user: -scored_user[0],
+        )
+        close = [name for score, name in scored if score >= FUZZY_MIN]
+        if close:
+            top = scored[0][0]
+            close = [name for score, name in scored if score >= top - FUZZY_TIE][:3]
+            question = (
+                f"Was that a ticket for {close[0]}?"
+                if len(close) == 1
+                else f"Did you mean {', '.join(close[:-1])} or {close[-1]}?"
+            )
+            raise ResolutionError(
+                f"No exact match for {display_name!r}; closest: {', '.join(close)}",
+                question=question,
+            )
+        raise ResolutionError(
+            f"No assignable user in {self.project_key} named {display_name!r}",
+            question=f"I couldn't find {display_name} in {self.project_key}. Who should I assign it to?",
+        )
 
     async def board_id(self) -> int:
         """The project's scrum board (JIRA_BOARD_ID overrides the lookup)."""

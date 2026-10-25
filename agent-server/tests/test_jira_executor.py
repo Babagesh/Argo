@@ -26,6 +26,8 @@ USERS = [
     {"accountId": "acc-sam", "displayName": "Sam Rivera", "accountType": "atlassian"},
     {"accountId": "acc-alex", "displayName": "Alex Kim", "accountType": "atlassian"},
     {"accountId": "acc-alexa", "displayName": "Alexa Chen", "accountType": "atlassian"},
+    {"accountId": "acc-john", "displayName": "John Smith", "accountType": "atlassian"},
+    {"accountId": "acc-caitlin", "displayName": "Caitlin Park", "accountType": "atlassian"},
 ]
 SPRINTS = [
     {"id": 4, "name": "SCRUM Sprint 4", "state": "active"},
@@ -217,6 +219,46 @@ def test_assign_ambiguous_returns_clarify(jira):
     result = run(plan(op("assign_issue", "SCRUM-1", resolve={"assignee_display_name": "Al"})), jira)
     assert result.status == "clarify"
     assert "Alex Kim" in result.clarification_question
+    assert not jira.mutations()
+
+
+@pytest.mark.parametrize(
+    ("spoken", "full_name"),
+    [("Jon", "John Smith"), ("Katelyn", "Caitlin Park"), ("Jon Smyth", "John Smith")],
+)
+def test_assign_misheard_name_asks_to_confirm(jira, spoken, full_name):
+    result = run(plan(op("assign_issue", "SCRUM-1", resolve={"assignee_display_name": spoken})), jira)
+    assert result.status == "clarify"
+    assert result.clarification_question == f"Was that a ticket for {full_name}?"
+    assert not jira.mutations()
+
+
+def test_assign_confirmed_full_name_goes_through(jira):
+    result = run(plan(op("assign_issue", "SCRUM-1", resolve={"assignee_display_name": "John Smith"})), jira)
+    assert result.status == "ok"
+    assert jira.mutations()[0][3] == {"accountId": "acc-john"}
+
+
+def test_assign_misheard_name_offers_close_people(jira):
+    result = run(plan(op("assign_issue", "SCRUM-1", resolve={"assignee_display_name": "Alix"})), jira)
+    assert result.status == "clarify"
+    assert result.clarification_question == "Did you mean Alex Kim or Alexa Chen?"
+
+
+def test_assign_unknown_name_asks_who(jira):
+    result = run(plan(op("assign_issue", "SCRUM-1", resolve={"assignee_display_name": "Zzyzx"})), jira)
+    assert result.status == "clarify"
+    assert "Who should I assign it to?" in result.clarification_question
+    assert not jira.mutations()
+
+
+def test_misheard_assignee_is_checked_before_create(jira):
+    create = op("create_issue")
+    create["rest"]["body"]["fields"]["summary"] = "Redis connection leak"
+    assign = op("assign_issue", "$LAST", resolve={"assignee_display_name": "Jon"})
+    result = run(plan(create, assign), jira)
+    assert result.status == "clarify"
+    assert result.clarification_question == "Was that a ticket for John Smith?"
     assert not jira.mutations()
 
 

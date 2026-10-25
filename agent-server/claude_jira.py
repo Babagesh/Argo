@@ -81,6 +81,13 @@ Rules
   dates must be ISO-8601 strings. Do not start the sprint.
 - Leave rest.body.accountId as "RESOLVE_FROM_DISPLAY_NAME" and set
   resolve.assignee_display_name unless context already has an account id.
+- Put assignee names in resolve.assignee_display_name (or fields.assignee)
+  exactly as heard, even if a team member's name is spelled differently.
+  Argo matches near-misses itself and asks the user to confirm.
+- If Argo asked "Was that a ticket for <Full Name>?" (or offered several
+  names) and the user confirms one, plan the original request with that exact
+  full name. If they name someone else, use that name. If they only say no,
+  ask who they meant.
 - delete_issue only when they clearly say delete/remove. Set confirm=true.
   If they are vague, needs_clarification=true and operations=[].
 - Multiple actions in one sentence become multiple operations, in order.
