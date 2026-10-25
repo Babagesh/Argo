@@ -148,19 +148,19 @@ class ArgoListener:
         self.awaiting_command = False
         self.armed_command = ""
 
-    def on_event(self, event: dict) -> None:
+    def on_event(self, event: dict) -> str | None:
         kind = event.get("type")
         transcript = (event.get("transcript") or "").strip()
 
         if kind == "error":
             print(f"[cartesia error] {event.get('message')}", file=sys.stderr)
-            return
+            return None
         if self.verbose and kind:
             extra = f" {transcript!r}" if transcript else ""
             print(f"  ({kind}{extra})")
 
         if kind == "turn.start":
-            return
+            return None
 
         if kind in {"turn.update", "turn.eager_end"}:
             self._maybe_arm(transcript)
@@ -170,7 +170,7 @@ class ArgoListener:
                     shown = transcript
                 if shown:
                     print(f"[partial] {shown}", flush=True)
-            return
+            return None
 
         if kind == "turn.end":
             self._maybe_arm(transcript)
@@ -187,6 +187,8 @@ class ArgoListener:
             self.awaiting_command = False
             self.armed_command = ""
             print(f"[idle] say '{self.wake_phrase}, ...' to address Argo", flush=True)
+            return command or ""
+        return None
 
     def _maybe_arm(self, transcript: str) -> None:
         if self.awaiting_command or not transcript:
@@ -293,7 +295,28 @@ async def stream_meeting(device, wake_phrase: str, verbose: bool) -> None:
                     except json.JSONDecodeError:
                         print(f"[stt] non-json: {raw!r}", file=sys.stderr)
                         continue
-                    listener.on_event(event)
+                    command = listener.on_event(event)
+                    if command is not None:
+                        if not command:
+                            print("[claude] skipped: wake phrase heard without a command", flush=True)
+                            continue
+                        print("[claude] planning Jira operation...", flush=True)
+                        try:
+                            from claude_jira import plan_from_transcript
+
+                            context = {
+                                "default_project_key": os.getenv("JIRA_PROJECT_KEY", "SCRUM"),
+                                "default_issue_type": "Task",
+                                "current_issue_key": os.getenv("JIRA_CURRENT_ISSUE"),
+                                "known_issue_keys": [os.getenv("JIRA_CURRENT_ISSUE")] if os.getenv("JIRA_CURRENT_ISSUE") else [],
+                            }
+                            plan = await asyncio.to_thread(
+                                plan_from_transcript, command, context=context
+                            )
+                            print("[claude result]")
+                            print(json.dumps(plan, indent=2, ensure_ascii=False), flush=True)
+                        except Exception as exc:
+                            print(f"[claude error] {exc}", file=sys.stderr, flush=True)
 
             sender = asyncio.create_task(send_audio())
             receiver = asyncio.create_task(recv_events())

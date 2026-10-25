@@ -19,7 +19,7 @@ from jira_op_schema import (
     validate_plan,
 )
 
-DEFAULT_MODEL = "claude-sonnet-4-5"
+DEFAULT_MODEL = "claude-sonnet-5-5"
 
 SYSTEM_PROMPT = """You are Argo's Jira planner for a standup voice agent.
 
@@ -168,7 +168,10 @@ def plan_from_transcript(
         max_tokens=2048,
         system=SYSTEM_PROMPT,
         tools=[EMIT_JIRA_PLAN_TOOL],
-        tool_choice={"type": "tool", "name": "emit_jira_plan"},
+        # Some Anthropic models (including the configured default) do not
+        # support forced tool selection. The system prompt asks for this tool;
+        # auto lets compatible models invoke it without rejecting the request.
+        tool_choice={"type": "auto"},
         messages=[
             {
                 "role": "user",

@@ -1,6 +1,6 @@
 modules:
-  jira:projectPage:
-    - key: scrumpulse-command-center
+  jira:globalPage:
+    - key: argo-global-page
       resource: main
       render: native
       resolver:
