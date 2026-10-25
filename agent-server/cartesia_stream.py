@@ -38,6 +38,7 @@ import websockets
 from dotenv import load_dotenv
 
 from argo_api import ArgoAPI
+from jira_client import JiraClient
 from meeting_session import OUTCOME_BY_STATUS, MeetingSession
 
 SAMPLE_RATE = 16000
@@ -175,6 +176,34 @@ def speak_with_cartesia(text: str) -> None:
             output.write(frames)
 
 
+async def load_jira_context() -> dict:
+    """Board snapshot for Claude: recent tickets, statuses and teammates' names.
+
+    Loaded once per meeting so Claude can correct misheard keys and names. If Jira
+    is unreachable the listener still runs with just the project defaults.
+    """
+    context: dict = {
+        "default_project_key": os.getenv("JIRA_PROJECT_KEY", "SCRUM"),
+        "default_issue_type": "Task",
+        "known_issue_keys": [],
+    }
+    try:
+        async with JiraClient.from_env() as client:
+            context = await client.snapshot_context()
+        print(
+            f"[jira] context: {len(context['known_issue_keys'])} tickets, "
+            f"{len(context['team_members'])} teammates",
+            flush=True,
+        )
+    except Exception as exc:
+        print(f"[jira] could not load board context, continuing without it: {exc}", file=sys.stderr, flush=True)
+    current = os.getenv("JIRA_CURRENT_ISSUE")
+    context["current_issue_key"] = current
+    if current and current not in context["known_issue_keys"]:
+        context["known_issue_keys"].append(current)
+    return context
+
+
 def wake_pattern(phrase: str) -> re.Pattern[str]:
     parts = [re.escape(p) for p in phrase.strip().split() if p]
     if not parts:
@@ -255,7 +284,7 @@ class ArgoListener:
             self._maybe_arm(transcript)
             if self.awaiting_command and transcript:
                 shown = command_after_wake(transcript, self.wake_re)
-                if shown is None and self.awaiting_command:
+                if shown is None:
                     shown = transcript
                 if shown:
                     print(f"[partial] {shown}", flush=True)
@@ -392,6 +421,7 @@ async def stream_meeting(device, wake_phrase: str, verbose: bool, session: Meeti
             "[audio] BlackHole cannot hear your mouth. Play system audio "
             "(YouTube / Teams speaker) through a Multi-Output that includes BlackHole 2ch."
         )
+    jira_context = await load_jira_context()
     async with websockets.connect(
         url,
         additional_headers=headers,
@@ -524,17 +554,11 @@ async def stream_meeting(device, wake_phrase: str, verbose: bool, session: Meeti
                             print(f"[spoken acknowledgement] {acknowledgement}", flush=True)
                             from claude_jira import plan_from_transcript
 
-                            context = {
-                                "default_project_key": os.getenv("JIRA_PROJECT_KEY", "SCRUM"),
-                                "default_issue_type": "Task",
-                                "current_issue_key": os.getenv("JIRA_CURRENT_ISSUE"),
-                                "known_issue_keys": [os.getenv("JIRA_CURRENT_ISSUE")] if os.getenv("JIRA_CURRENT_ISSUE") else [],
-                            }
                             planning = asyncio.create_task(
                                 asyncio.to_thread(
                                     plan_from_transcript,
                                     command_for_claude,
-                                    context=context,
+                                    context=jira_context,
                                     utterance_id=utterance_id,
                                 )
                             )

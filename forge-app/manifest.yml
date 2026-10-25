@@ -35,9 +35,6 @@ permissions:
     - read:jira-work
     - write:jira-work
     - read:jira-user
-    - storage:app
-    - read:page:confluence
-    - search:confluence
   external:
     fetch:
       backend:

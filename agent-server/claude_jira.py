@@ -62,6 +62,8 @@ Rules
 - If the user only asks to find/list issues by description, search_issues alone
   is appropriate.
 - Use context.default_project_key when creating or searching.
+- context.known_issues and context.team_members list the board's tickets and
+  people; use them to correct misheard keys, summaries and names.
 - Spoken "move to in progress / done / to do" is transition_issue, not update_issue.
 - Leave rest.body.transition.id as "RESOLVE_FROM_NAME" and set
   resolve.transition_name to the Jira status/transition name.
@@ -90,18 +92,11 @@ Rules
 """
 
 
-def _adf_or_text(value: Any) -> Any:
-    if isinstance(value, str):
-        return text_to_adf(value)
-    return value
-
-
 def _normalize_operation(op: dict[str, Any]) -> dict[str, Any]:
     rest = dict(op.get("rest") or {})
     rest.setdefault("path_params", {})
     rest.setdefault("query", {})
-    if "body" not in rest:
-        rest["body"] = None
+    rest.setdefault("body", None)
     issue_key = op.get("issue_key")
     if issue_key and "{issueIdOrKey}" in str(rest.get("path", "")):
         rest["path_params"] = {

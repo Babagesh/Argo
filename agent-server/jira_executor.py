@@ -185,7 +185,6 @@ class _PlanRun:
         self,
         method: str,
         path: str,
-        result: OpResult,
         *,
         body: Any = None,
         query: dict[str, Any] | None = None,
@@ -205,7 +204,7 @@ class _PlanRun:
     ) -> Any:
         """Send a create/update; on a 400 naming optional fields, retry once without them."""
         try:
-            return await self._send(method, path, result, body=body)
+            return await self._send(method, path, body=body)
         except JiraError as exc:
             fields = body.get("fields") or {}
             bad = set(exc.field_errors) & set(fields)
@@ -216,7 +215,7 @@ class _PlanRun:
             retry = {**body, "fields": {k: v for k, v in fields.items() if k not in bad}}
             if not retry["fields"]:
                 raise
-            return await self._send(method, path, result, body=retry)
+            return await self._send(method, path, body=retry)
 
     async def _pre_state(self, key: str) -> dict[str, Any] | None:
         if self._virtual(key):
@@ -317,7 +316,6 @@ class _PlanRun:
         data = await self._send(
             method,
             path,
-            result,
             query={"fields": query.get("fields") or "summary,status,assignee,priority,issuetype"},
             mutating=False,
         )
@@ -337,7 +335,6 @@ class _PlanRun:
         data = await self._send(
             method,
             path,
-            result,
             body={
                 "jql": jql,
                 "maxResults": limit,
@@ -391,7 +388,7 @@ class _PlanRun:
         query = (op.get("rest") or {}).get("query") or {}
         subtasks = "true" if str(query.get("deleteSubtasks")).lower() == "true" else "false"
         method, path = self._path("delete_issue", key)
-        await self._send(method, path, result, query={"deleteSubtasks": subtasks})
+        await self._send(method, path, query={"deleteSubtasks": subtasks})
         result.detail = {"deleted": key}
         result.spoken = f"deleted {key}"
         self.last_key = None
@@ -422,12 +419,12 @@ class _PlanRun:
         pre = await self._pre_state(key)
         method, path = self._path("transition_issue", key)
         payload = {"transition": {"id": transition_id}}
-        await self._send(method, path, result, body=payload)
+        await self._send(method, path, body=payload)
         self.client.forget_transitions(key)
         # Transition screens often reject inline comments, so post them separately.
         for comment in comments:
             _, comment_path = self._path("add_comment", key)
-            await self._send("POST", comment_path, result, body={"body": comment})
+            await self._send("POST", comment_path, body={"body": comment})
         result.detail = {"to": target, "from": (pre or {}).get("status"), "comments": len(comments)}
         result.spoken = f"moved {key} to {target}"
         self.last_key = key
@@ -443,7 +440,7 @@ class _PlanRun:
             raise _OpFailed("add_comment needs comment text")
         method, path = self._path("add_comment", key)
         payload = {"body": comment}
-        data = await self._send(method, path, result, body=payload)
+        data = await self._send(method, path, body=payload)
         result.detail = {"comment_id": (data or {}).get("id"), "text": adf_text(comment)}
         result.spoken = f"commented on {key}"
         self.last_key = key
@@ -465,7 +462,7 @@ class _PlanRun:
         pre = await self._pre_state(key)
         method, path = self._path("assign_issue", key)
         payload = {"accountId": account}
-        await self._send(method, path, result, body=payload)
+        await self._send(method, path, body=payload)
         result.detail = {"assignee": who, "from": (pre or {}).get("assignee")}
         result.spoken = f"unassigned {key}" if account is None else f"assigned {key} to {who}"
         self.last_key = key
@@ -484,7 +481,7 @@ class _PlanRun:
         path = path.format(sprintId=sprint_id)
         payload = {"issues": [key]}
         if not self._virtual(key):
-            await self._send(method, path, result, body=payload)
+            await self._send(method, path, body=payload)
         result.detail = {"sprint": sprint, "sprint_id": sprint_id}
         result.spoken = f"moved {key} into {sprint}"
         self.last_key = key
@@ -497,7 +494,7 @@ class _PlanRun:
         method, path = self._path("move_to_backlog")
         payload = {"issues": [key]}
         if not self._virtual(key):
-            await self._send(method, path, result, body=payload)
+            await self._send(method, path, body=payload)
         result.detail = {"backlog": key}
         result.spoken = f"moved {key} to the backlog"
         self.last_key = key

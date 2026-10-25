@@ -34,6 +34,11 @@ export interface Command {
   at: string;
 }
 
+export interface TranscriptSegment {
+  at: string; // ISO timestamp
+  text: string;
+}
+
 export interface Meeting {
   id: string;
   title: string;
