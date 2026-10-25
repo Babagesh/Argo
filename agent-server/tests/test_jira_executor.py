@@ -164,6 +164,24 @@ def test_create_requires_real_summary(jira):
     assert not jira.mutations()
 
 
+def test_on_action_sees_successful_ops_as_ok(jira):
+    # Regression: handlers audit as their last step, before run() used to set ok=True,
+    # so every successful op was reported to the hook (and audit log) as ok=False.
+    seen = []
+    create = op("create_issue")
+    create["rest"]["body"]["fields"]["summary"] = "Redis connection leak"
+    result = run(plan(create), jira, on_action=lambda o, r, pre, req, dry: seen.append((o["op"], r.ok, dry)))
+    assert result.status == "ok"
+    assert seen == [("create_issue", True, False)]
+
+
+def test_on_action_sees_failed_ops_as_not_ok(jira):
+    seen = []
+    result = run(plan(op("create_issue")), jira, on_action=lambda o, r, pre, req, dry: seen.append(r.ok))
+    assert result.status == "failed"  # summary is still the SHORT_TITLE placeholder
+    assert seen == [False]
+
+
 def test_transition_resolves_spoken_status_and_splits_comment(jira):
     t = op("transition_issue", "scrum-1", resolve={"transition_name": "finished"})
     t["rest"]["body"]["update"]["comment"][0]["add"]["body"] = text_to_adf("Shipped it")

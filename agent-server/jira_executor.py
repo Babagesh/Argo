@@ -530,16 +530,21 @@ class _PlanRun:
             if failure or question:
                 result.detail = "skipped"
                 continue
+            # Handlers call _audit() as their last step, so success has to be set before
+            # they run (the except branches below reset it). Setting it afterwards made
+            # every successful op look failed to the audit log and the on_action hook.
+            result.ok = True
             try:
                 await getattr(self, name)(op, result)
-                result.ok = True
             except (_Clarify, ResolutionError) as exc:
+                result.ok = False
                 question = getattr(exc, "question", None)
                 if question:
                     result.detail = question
                 else:
                     failure = result.detail = str(exc)
             except (_OpFailed, JiraError) as exc:
+                result.ok = False
                 failure = result.detail = str(exc)
                 if isinstance(exc, JiraError):
                     result.http_status = exc.status
