@@ -6,6 +6,7 @@ modules:
       resolver:
         function: ui-resolver
       title: Argo
+      icon: resource:argo-icons;argo_logo.png
   jira:issuePanel:
     - key: scrumpulse-provenance-panel
       resource: panel
@@ -13,7 +14,7 @@ modules:
       resolver:
         function: ui-resolver
       title: Argo Meeting Provenance
-      icon: https://developer.atlassian.com/platform/forge/images/icons/issue-panel-icon.svg
+      icon: resource:argo-icons;argo_logo.png
   webtrigger:
     - key: agent-action-webhook
       function: webhook-handler
@@ -23,6 +24,8 @@ modules:
     - key: webhook-handler
       handler: index.webhookHandler
 resources:
+  - key: argo-icons
+    path: resources/icons
   - key: main
     path: src/frontend/index.tsx
   - key: panel

@@ -66,6 +66,11 @@ FOLLOWUP_LISTEN_SECONDS = 15
 FOLLOWUP_PROMPT = "I didn't hear a request. What would you like me to do?"
 
 
+def report_voice_state(state: str) -> None:
+    """Emit a compact status event for the desktop app's voice indicator."""
+    print(f"[ARGO_STATE:{state}]", flush=True)
+
+
 def list_devices() -> None:
     print(sd.query_devices())
     print(f"\nDefault input: {sd.default.device[0]}")
@@ -211,6 +216,21 @@ class ArgoListener:
         self.followup_active = False
         self.followup_prompting = False
         self.user_speaking = False
+        self.pending_clarification: tuple[str, str] | None = None
+        self.completed_clarification: tuple[str, str] | None = None
+
+    def begin_clarification_followup(self, original_request: str, question: str) -> None:
+        """Accept the next speech turn as an answer, without requiring the wake phrase."""
+        self.pending_clarification = (original_request, question)
+        self.completed_clarification = None
+        self.followup_active = True
+        self.awaiting_command = False
+        self.armed_command = ""
+
+    def take_completed_clarification(self) -> tuple[str, str] | None:
+        context = self.completed_clarification
+        self.completed_clarification = None
+        return context
 
     def on_event(self, event: dict) -> str | None:
         kind = event.get("type")
@@ -258,6 +278,8 @@ class ArgoListener:
                 if not command:
                     print("[follow-up] still waiting for a request", flush=True)
                     return ""
+                self.completed_clarification = self.pending_clarification
+                self.pending_clarification = None
                 self.followup_active = False
                 self.awaiting_command = False
                 self.armed_command = ""
@@ -288,6 +310,7 @@ class ArgoListener:
                     flush=True,
                 )
                 return ""
+            self.pending_clarification = None
             print(f"[idle] say '{self.wake_phrase}, ...' to address Argo", flush=True)
             return command
         return None
@@ -300,6 +323,7 @@ class ArgoListener:
             return
         self.awaiting_command = True
         self.armed_command = command
+        report_voice_state("capturing_command")
         print(f"[wake] heard '{self.wake_phrase}' — waiting until the thought ends", flush=True)
 
 
@@ -368,8 +392,6 @@ async def stream_meeting(device, wake_phrase: str, verbose: bool, session: Meeti
             "[audio] BlackHole cannot hear your mouth. Play system audio "
             "(YouTube / Teams speaker) through a Multi-Output that includes BlackHole 2ch."
         )
-    print(f"[idle] say '{wake_phrase}, ...' then finish the thought", flush=True)
-
     async with websockets.connect(
         url,
         additional_headers=headers,
@@ -378,6 +400,8 @@ async def stream_meeting(device, wake_phrase: str, verbose: bool, session: Meeti
         ping_timeout=20,
     ) as ws:
         stream.start()
+        report_voice_state("listening")
+        print(f"[idle] say '{wake_phrase}, ...' then finish the thought", flush=True)
         try:
 
             async def send_audio() -> None:
@@ -392,6 +416,37 @@ async def stream_meeting(device, wake_phrase: str, verbose: bool, session: Meeti
                 previous_acknowledgement = None
                 followup_task: asyncio.Task | None = None
 
+                async def wait_for_answer() -> None:
+                    deadline = asyncio.get_running_loop().time() + FOLLOWUP_LISTEN_SECONDS
+                    hard_deadline = deadline + TURN_END_TIMEOUT_MS / 1000 + 2
+                    while listener.followup_active:
+                        now = asyncio.get_running_loop().time()
+                        if now >= hard_deadline or (now >= deadline and not listener.user_speaking):
+                            break
+                        await asyncio.sleep(0.1)
+                    if listener.followup_active and not listener.user_speaking:
+                        listener.followup_active = False
+                        listener.pending_clarification = None
+                        print("[follow-up] answer window ended; say the wake phrase to start again", flush=True)
+                        report_voice_state("listening")
+
+                async def ask_clarification(question: str, original_request: str) -> None:
+                    nonlocal followup_task
+                    listener.begin_clarification_followup(original_request, question)
+                    listener.followup_prompting = True
+                    report_voice_state("speaking")
+                    print(f"[spoken clarification] {question}", flush=True)
+                    try:
+                        await asyncio.to_thread(speak_with_cartesia, question)
+                    except Exception as exc:
+                        print(f"[tts error] {exc}", file=sys.stderr, flush=True)
+                    finally:
+                        listener.followup_prompting = False
+                    report_voice_state("awaiting_answer")
+                    if followup_task and not followup_task.done():
+                        followup_task.cancel()
+                    followup_task = asyncio.create_task(wait_for_answer())
+
                 async def prompt_for_followup() -> None:
                     await asyncio.sleep(FOLLOWUP_PROMPT_DELAY_SECONDS)
                     if not listener.followup_active or listener.user_speaking:
@@ -399,12 +454,14 @@ async def stream_meeting(device, wake_phrase: str, verbose: bool, session: Meeti
 
                     print(f"[spoken follow-up] {FOLLOWUP_PROMPT}", flush=True)
                     listener.followup_prompting = True
+                    report_voice_state("speaking")
                     try:
                         await asyncio.to_thread(speak_with_cartesia, FOLLOWUP_PROMPT)
                     except Exception as exc:
                         print(f"[tts error] {exc}", file=sys.stderr, flush=True)
                     finally:
                         listener.followup_prompting = False
+                    report_voice_state("awaiting_answer")
 
                     deadline = asyncio.get_running_loop().time() + FOLLOWUP_LISTEN_SECONDS
                     hard_deadline = deadline + TURN_END_TIMEOUT_MS / 1000 + 2
@@ -417,6 +474,7 @@ async def stream_meeting(device, wake_phrase: str, verbose: bool, session: Meeti
                     if listener.followup_active and not listener.user_speaking:
                         listener.followup_active = False
                         print("[follow-up] timed out; say the wake phrase to start again", flush=True)
+                        report_voice_state("listening")
 
                 async for raw in ws:
                     if isinstance(raw, bytes):
@@ -430,6 +488,7 @@ async def stream_meeting(device, wake_phrase: str, verbose: bool, session: Meeti
                         session.record_segment(event.get("transcript") or "")
                     command = listener.on_event(event)
                     if command == "" and listener.followup_active:
+                        report_voice_state("awaiting_answer")
                         if followup_task and not followup_task.done():
                             followup_task.cancel()
                         followup_task = asyncio.create_task(prompt_for_followup())
@@ -439,6 +498,17 @@ async def stream_meeting(device, wake_phrase: str, verbose: bool, session: Meeti
                             followup_task.cancel()
                         followup_task = None
                     if command is not None:
+                        report_voice_state("thinking")
+                        clarification_context = listener.take_completed_clarification()
+                        command_for_claude = command
+                        if clarification_context:
+                            prior_request, prior_question = clarification_context
+                            command_for_claude = (
+                                "Resolve the user's follow-up to this Jira request.\n"
+                                f"Original request: {prior_request}\n"
+                                f"Argo asked: {prior_question}\n"
+                                f"User answered: {command}"
+                            )
                         print("[claude] planning Jira operation...", flush=True)
                         # Save the command now, before Claude or Jira run, tied to this meeting.
                         utterance_id = session.next_utterance_id()
@@ -463,15 +533,17 @@ async def stream_meeting(device, wake_phrase: str, verbose: bool, session: Meeti
                             planning = asyncio.create_task(
                                 asyncio.to_thread(
                                     plan_from_transcript,
-                                    command,
+                                    command_for_claude,
                                     context=context,
                                     utterance_id=utterance_id,
                                 )
                             )
+                            report_voice_state("speaking")
                             try:
                                 await asyncio.to_thread(speak_with_cartesia, acknowledgement)
                             except Exception as exc:
                                 print(f"[tts error] {exc}", file=sys.stderr, flush=True)
+                            report_voice_state("thinking")
                             plan = await planning
                             print("[claude plan]")
                             print(json.dumps(plan, indent=2, ensure_ascii=False), flush=True)
@@ -481,19 +553,22 @@ async def stream_meeting(device, wake_phrase: str, verbose: bool, session: Meeti
                                 session.command_done(utterance_id, command, plan=plan, outcome="clarify", spoken_reply=reply)
                                 print(f"[spoken result] {reply}", flush=True)
                                 try:
-                                    await asyncio.to_thread(speak_with_cartesia, reply)
+                                    await ask_clarification(reply, command_for_claude)
                                 except Exception as exc:
-                                    print(f"[tts error] {exc}", file=sys.stderr, flush=True)
+                                    print(f"[follow-up error] {exc}", file=sys.stderr, flush=True)
                                 continue
                             if not plan.get("operations"):
                                 print("[jira] no operations to execute", flush=True)
                                 reply = plan.get("spoken_reply") or "I don't have a Jira action to run."
                                 session.command_done(utterance_id, command, plan=plan, outcome="no_op", spoken_reply=reply)
                                 print(f"[spoken result] {reply}", flush=True)
+                                report_voice_state("speaking")
                                 try:
                                     await asyncio.to_thread(speak_with_cartesia, reply)
                                 except Exception as exc:
                                     print(f"[tts error] {exc}", file=sys.stderr, flush=True)
+                                finally:
+                                    report_voice_state("listening")
                                 continue
 
                             from jira_executor import execute_plan_sync
@@ -528,13 +603,23 @@ async def stream_meeting(device, wake_phrase: str, verbose: bool, session: Meeti
                                 spoken_reply=reply,
                             )
                             print(f"[spoken result] {reply}", flush=True)
-                            try:
-                                await asyncio.to_thread(speak_with_cartesia, reply)
-                            except Exception as exc:
-                                print(f"[tts error] {exc}", file=sys.stderr, flush=True)
+                            if execution.status == "clarify":
+                                try:
+                                    await ask_clarification(reply, command_for_claude)
+                                except Exception as exc:
+                                    print(f"[follow-up error] {exc}", file=sys.stderr, flush=True)
+                            else:
+                                report_voice_state("speaking")
+                                try:
+                                    await asyncio.to_thread(speak_with_cartesia, reply)
+                                except Exception as exc:
+                                    print(f"[tts error] {exc}", file=sys.stderr, flush=True)
+                                finally:
+                                    report_voice_state("listening")
                         except Exception as exc:
                             session.command_done(utterance_id, command, plan=None, outcome="error", spoken_reply=str(exc))
                             print(f"[agent error] {exc}", file=sys.stderr, flush=True)
+                            report_voice_state("listening")
 
             sender = asyncio.create_task(send_audio())
             receiver = asyncio.create_task(recv_events())

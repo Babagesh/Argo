@@ -5,3 +5,5 @@ __pycache__/
 agent-server/audit.jsonl
 
 agent-server/.env
+desktop-app/.build/
+desktop-app/build/
