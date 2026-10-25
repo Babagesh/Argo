@@ -94,13 +94,24 @@ function MeetingList({ meetings, onOpen }: { meetings: Meeting[]; onOpen: (id: s
 
 function CreateTicket({ meeting }: { meeting: Meeting }) {
   const [summary, setSummary] = useState(`Follow up: ${meeting.title}`);
+  const [projects, setProjects] = useState<{ label: string; value: string }[] | null>(null);
+  const [project, setProject] = useState<{ label: string; value: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; key?: string; error?: string } | null>(null);
+
+  useEffect(() => {
+    (invoke('getProjects') as Promise<{ key: string; name: string }[]>).then((list) => {
+      const options = list.map((p) => ({ label: `${p.name} (${p.key})`, value: p.key }));
+      setProjects(options);
+      setProject(options[0] ?? null);
+    });
+  }, []);
 
   const create = async () => {
     setBusy(true);
     const res = (await invoke('createIssue', {
       summary,
+      projectKey: project?.value,
       description: `${meeting.summary}\n\nDecisions: ${meeting.decisions.join('; ')}`,
     })) as { ok: boolean; key?: string; error?: string };
     setResult(res);
@@ -110,15 +121,24 @@ function CreateTicket({ meeting }: { meeting: Meeting }) {
   return (
     <Stack space="space.150">
       <Heading size="small">Create a Jira ticket from this meeting</Heading>
-      <Textfield value={summary} onChange={(e) => setSummary(e.target.value)} />
-      <Inline>
-        <Button appearance="primary" isDisabled={busy} onClick={create}>
-          Create ticket
-        </Button>
-      </Inline>
+      {projects && projects.length === 0 ? (
+        <SectionMessage appearance="warning" title="No projects available">
+          <Text>Create a Jira software project on this site to turn meeting actions into tickets.</Text>
+        </SectionMessage>
+      ) : (
+        <>
+          <Select options={projects ?? []} value={project} onChange={(o) => o && setProject(o)} placeholder="Project" />
+          <Textfield value={summary} onChange={(e) => setSummary(e.target.value)} />
+          <Inline>
+            <Button appearance="primary" isDisabled={busy || !project} onClick={create}>
+              Create ticket
+            </Button>
+          </Inline>
+        </>
+      )}
       {result?.ok && (
         <SectionMessage appearance="success" title={`Created ${result.key}`}>
-          <Text>The issue was added to this project's backlog.</Text>
+          <Text>The issue was added to the selected project.</Text>
         </SectionMessage>
       )}
       {result && !result.ok && (

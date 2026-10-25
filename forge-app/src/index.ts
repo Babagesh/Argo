@@ -15,9 +15,20 @@ resolver.define('getMeeting', ({ payload }) => {
   return meeting;
 });
 
-// Creates a real Jira issue as the current user in the project the page is open in.
+// Lists projects the current user can see, for choosing where to create tickets.
+resolver.define('getProjects', async () => {
+  const res = await api.asUser().requestJira(route`/rest/api/3/project/search?maxResults=50`, {
+    headers: { Accept: 'application/json' },
+  });
+  if (!res.ok) return [];
+  const data = (await res.json()) as { values: { key: string; name: string }[] };
+  return data.values.map((p) => ({ key: p.key, name: p.name }));
+});
+
+// Creates a real Jira issue as the current user in the chosen project.
 resolver.define('createIssue', async ({ payload, context }) => {
-  const projectKey: string = context.extension?.project?.key ?? 'KAN';
+  const projectKey: string | undefined = payload.projectKey ?? context.extension?.project?.key;
+  if (!projectKey) return { ok: false, error: 'Choose a project first.' };
   const summary = String(payload.summary ?? '').trim();
   if (!summary) return { ok: false, error: 'Summary is required.' };
 
