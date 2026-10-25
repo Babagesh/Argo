@@ -25,6 +25,10 @@ _STATUS_SYNONYMS = (
     {"done", "complete", "completed", "closed", "resolved", "finished", "shipped"},
 )
 
+# Spoken sprint references that mean "whichever sprint is running" / "the one after".
+_ACTIVE_SPRINT_WORDS = {"", "active", "current", "this", "thissprint", "currentsprint", "activesprint"}
+_NEXT_SPRINT_WORDS = {"next", "nextsprint", "upcoming", "upcomingsprint"}
+
 
 class JiraError(Exception):
     """Non-2xx response from Jira, with its errorMessages / errors parsed out."""
@@ -84,9 +88,12 @@ class JiraClient:
         api_token: str,
         project_key: str = "SCRUM",
         *,
+        board_id: int | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.project_key = project_key.upper()
+        self._board_id = board_id
+        self._sprints: list[dict[str, Any]] | None = None
         self._http = httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
             auth=(email, api_token),
@@ -112,6 +119,7 @@ class JiraClient:
             os.environ["JIRA_EMAIL"],
             os.environ["JIRA_API_TOKEN"],
             os.getenv("JIRA_PROJECT_KEY", "SCRUM"),
+            board_id=int(os.environ["JIRA_BOARD_ID"]) if os.getenv("JIRA_BOARD_ID") else None,
         )
 
     async def __aenter__(self) -> JiraClient:
@@ -262,6 +270,59 @@ class JiraClient:
                 question=f"Which {display_name} do you mean: {', '.join(candidates)}?",
             )
         raise ResolutionError(f"No assignable user in {self.project_key} named {display_name!r}")
+
+    async def board_id(self) -> int:
+        """The project's scrum board (JIRA_BOARD_ID overrides the lookup)."""
+        if self._board_id is None:
+            data = await self.request(
+                "GET", "/rest/agile/1.0/board", query={"projectKeyOrId": self.project_key}
+            )
+            boards = (data or {}).get("values") or []
+            scrum = [b for b in boards if b.get("type") == "scrum"]
+            if not (scrum or boards):
+                raise ResolutionError(f"No board for project {self.project_key}")
+            self._board_id = int((scrum or boards)[0]["id"])
+        return self._board_id
+
+    async def open_sprints(self) -> list[dict[str, Any]]:
+        if self._sprints is None:
+            board = await self.board_id()
+            data = await self.request(
+                "GET",
+                f"/rest/agile/1.0/board/{board}/sprint",
+                query={"state": "active,future"},
+            )
+            self._sprints = (data or {}).get("values") or []
+        return self._sprints
+
+    async def sprint_id(self, name: str | None) -> tuple[int, str]:
+        """Map a spoken sprint ("current", "next", "sprint 4") to (sprint id, sprint name)."""
+        sprints = await self.open_sprints()
+        wanted = norm(name)
+
+        def found(s: dict[str, Any]) -> tuple[int, str]:
+            return int(s["id"]), s.get("name") or f"sprint {s['id']}"
+
+        if wanted in _ACTIVE_SPRINT_WORDS:
+            matches = [s for s in sprints if s.get("state") == "active"]
+        elif wanted in _NEXT_SPRINT_WORDS:
+            future = sorted(
+                (s for s in sprints if s.get("state") == "future"),
+                key=lambda s: (s.get("startDate") or "~", s["id"]),
+            )
+            matches = future[:1]
+        else:
+            matches = [s for s in sprints if norm(s.get("name")) == wanted] or [
+                s for s in sprints if wanted in norm(s.get("name"))
+            ]
+        if len(matches) == 1:
+            return found(matches[0])
+
+        options = [s.get("name") for s in (matches or sprints)]
+        raise ResolutionError(
+            f"No single open sprint matches {name or 'active'!r}; open: {', '.join(options) or 'none'}",
+            question=f"Which sprint do you mean: {', '.join(options)}?" if options else None,
+        )
 
     # -- context for Claude -------------------------------------------------
 

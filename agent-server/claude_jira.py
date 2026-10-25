@@ -14,6 +14,7 @@ from jira_op_schema import (
     EMIT_JIRA_PLAN_TOOL,
     OPERATION_TEMPLATES,
     SCHEMA_VERSION,
+    SPRINT_OPS,
     empty_plan,
     text_to_adf,
     validate_plan,
@@ -42,6 +43,10 @@ Standup extras (still go through the same handler)
 - add_comment       POST .../comment
 - assign_issue      PUT  .../assignee
 
+Sprint planning (Jira Software Agile API)
+- move_to_sprint    POST /rest/agile/1.0/sprint/{sprintId}/issue
+- move_to_backlog   POST /rest/agile/1.0/backlog/issue
+
 Rules
 - Put Jira Cloud v3 bodies under rest.body. Descriptions and comments MUST be
   ADF ({"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"..."}]}]}).
@@ -51,6 +56,13 @@ Rules
 - Spoken "move to in progress / done / to do" is transition_issue, not update_issue.
 - Leave rest.body.transition.id as "RESOLVE_FROM_NAME" and set
   resolve.transition_name to the Jira status/transition name.
+- "Put it in the sprint / pull into this sprint / add to sprint 4" is
+  move_to_sprint. Set resolve.sprint_name to the spoken sprint name ("next"
+  for the next sprint) or "ACTIVE" for the current one. Leave
+  path_params.sprintId as "RESOLVE_FROM_NAME" and set body.issues to [key].
+- "Move to the backlog / take it out of the sprint / punt it" is
+  move_to_backlog, NOT transition_issue. Status words (to do, in progress,
+  done) are still transition_issue.
 - Leave rest.body.accountId as "RESOLVE_FROM_DISPLAY_NAME" and set
   resolve.assignee_display_name unless context already has an account id.
 - delete_issue only when they clearly say delete/remove. Set confirm=true.
@@ -90,6 +102,8 @@ def _normalize_operation(op: dict[str, Any]) -> dict[str, Any]:
             fields = {**fields, "description": text_to_adf(fields["description"])}
             body = {**body, "fields": fields}
             rest["body"] = body
+    if name in SPRINT_OPS and issue_key and not (body or {}).get("issues"):
+        rest["body"] = {**(body or {}), "issues": [issue_key]}
     if name == "add_comment" and isinstance(body, dict) and isinstance(body.get("body"), str):
         rest["body"] = {**body, "body": text_to_adf(body["body"])}
     if name == "transition_issue" and isinstance(body, dict):

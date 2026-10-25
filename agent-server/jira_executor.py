@@ -26,7 +26,7 @@ from urllib.parse import quote
 from dotenv import load_dotenv
 
 from jira_client import JiraClient, JiraError, ResolutionError, brief_issue
-from jira_op_schema import REST_ROUTES, text_to_adf, validate_plan
+from jira_op_schema import REST_ROUTES, SPRINT_OPS, text_to_adf, validate_plan
 
 CHAIN_REFS = {"$LAST", "LAST", "PREVIOUS", "NEW", "PROJ-123"}
 TEMPLATE_PLACEHOLDERS = {
@@ -147,7 +147,12 @@ class _PlanRun:
 
     def _key(self, op: dict[str, Any]) -> str:
         rest = op.get("rest") or {}
-        raw = (rest.get("path_params") or {}).get("issueIdOrKey") or op.get("issue_key") or ""
+        issues = (rest.get("body") or {}).get("issues") if op.get("op") in SPRINT_OPS else None
+        raw = (
+            (rest.get("path_params") or {}).get("issueIdOrKey")
+            or op.get("issue_key")
+            or (issues[0] if isinstance(issues, list) and issues else "")
+        )
         key = str(raw).strip().upper()
         if not key or key in CHAIN_REFS:
             if self.last_key:
@@ -452,6 +457,38 @@ class _PlanRun:
         await self._send(method, path, result, body=payload)
         result.detail = {"assignee": who, "from": (pre or {}).get("assignee")}
         result.spoken = f"unassigned {key}" if account is None else f"assigned {key} to {who}"
+        self.last_key = key
+        self._audit(op, result, pre, payload)
+
+    async def move_to_sprint(self, op: dict[str, Any], result: OpResult) -> None:
+        key = self._key(op)
+        result.issue_key = key
+        name = (op.get("resolve") or {}).get("sprint_name")
+        if is_placeholder(name) or str(name).strip().upper() == "ACTIVE":
+            name = None
+        # The sprint id always comes from the board, never from the plan's path_params.
+        sprint_id, sprint = await self.client.sprint_id(name)
+        pre = await self._pre_state(key)
+        method, path = REST_ROUTES["move_to_sprint"]
+        path = path.format(sprintId=sprint_id)
+        payload = {"issues": [key]}
+        if not self._virtual(key):
+            await self._send(method, path, result, body=payload)
+        result.detail = {"sprint": sprint, "sprint_id": sprint_id}
+        result.spoken = f"moved {key} into {sprint}"
+        self.last_key = key
+        self._audit(op, result, pre, payload)
+
+    async def move_to_backlog(self, op: dict[str, Any], result: OpResult) -> None:
+        key = self._key(op)
+        result.issue_key = key
+        pre = await self._pre_state(key)
+        method, path = self._path("move_to_backlog")
+        payload = {"issues": [key]}
+        if not self._virtual(key):
+            await self._send(method, path, result, body=payload)
+        result.detail = {"backlog": key}
+        result.spoken = f"moved {key} to the backlog"
         self.last_key = key
         self._audit(op, result, pre, payload)
 

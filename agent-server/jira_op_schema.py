@@ -21,7 +21,12 @@ OPS = (
     "transition_issue",
     "add_comment",
     "assign_issue",
+    "move_to_sprint",
+    "move_to_backlog",
 )
+
+# Agile ops that act on one issue but carry its key in body.issues, not the path.
+SPRINT_OPS = ("move_to_sprint", "move_to_backlog")
 
 # Paths the Atlassian handler should call. `{issueIdOrKey}` is filled from
 # path_params. Transition IDs and accountIds are instance-specific — the
@@ -35,6 +40,8 @@ REST_ROUTES = {
     "transition_issue": ("POST", "/rest/api/3/issue/{issueIdOrKey}/transitions"),
     "add_comment": ("POST", "/rest/api/3/issue/{issueIdOrKey}/comment"),
     "assign_issue": ("PUT", "/rest/api/3/issue/{issueIdOrKey}/assignee"),
+    "move_to_sprint": ("POST", "/rest/agile/1.0/sprint/{sprintId}/issue"),
+    "move_to_backlog": ("POST", "/rest/agile/1.0/backlog/issue"),
 }
 
 
@@ -200,6 +207,31 @@ ASSIGN_ISSUE_TEMPLATE: dict[str, Any] = {
     },
 }
 
+MOVE_TO_SPRINT_TEMPLATE: dict[str, Any] = {
+    "op": "move_to_sprint",
+    "issue_key": "PROJ-123",
+    "resolve": {"sprint_name": "ACTIVE"},
+    "rest": {
+        "method": "POST",
+        "path": "/rest/agile/1.0/sprint/{sprintId}/issue",
+        "path_params": {"sprintId": "RESOLVE_FROM_NAME"},
+        "query": {},
+        "body": {"issues": ["PROJ-123"]},
+    },
+}
+
+MOVE_TO_BACKLOG_TEMPLATE: dict[str, Any] = {
+    "op": "move_to_backlog",
+    "issue_key": "PROJ-123",
+    "rest": {
+        "method": "POST",
+        "path": "/rest/agile/1.0/backlog/issue",
+        "path_params": {},
+        "query": {},
+        "body": {"issues": ["PROJ-123"]},
+    },
+}
+
 OPERATION_TEMPLATES: dict[str, dict[str, Any]] = {
     "create_issue": CREATE_ISSUE_TEMPLATE,
     "get_issue": GET_ISSUE_TEMPLATE,
@@ -209,6 +241,8 @@ OPERATION_TEMPLATES: dict[str, dict[str, Any]] = {
     "transition_issue": TRANSITION_ISSUE_TEMPLATE,
     "add_comment": ADD_COMMENT_TEMPLATE,
     "assign_issue": ASSIGN_ISSUE_TEMPLATE,
+    "move_to_sprint": MOVE_TO_SPRINT_TEMPLATE,
+    "move_to_backlog": MOVE_TO_BACKLOG_TEMPLATE,
 }
 
 PLAN_ENVELOPE_TEMPLATE: dict[str, Any] = {
@@ -238,6 +272,7 @@ _OPERATION_SCHEMA: dict[str, Any] = {
                 "transition_name": {"type": "string"},
                 "assignee_display_name": {"type": "string"},
                 "assignee_account_id": {"type": "string"},
+                "sprint_name": {"type": "string"},
             },
         },
         "rest": {
@@ -327,6 +362,10 @@ def validate_plan(plan: dict[str, Any]) -> list[str]:
             )
             if not key:
                 errors.append(f"operations[{i}] missing issueIdOrKey")
+        if name in SPRINT_OPS:
+            issues = (rest.get("body") or {}).get("issues") or []
+            if not op.get("issue_key") and not (isinstance(issues, list) and issues):
+                errors.append(f"operations[{i}] {name} needs issue_key")
         if name == "create_issue":
             fields = ((rest.get("body") or {}).get("fields") or {})
             if not (fields.get("project") or {}).get("key"):

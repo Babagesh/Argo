@@ -27,6 +27,11 @@ USERS = [
     {"accountId": "acc-alex", "displayName": "Alex Kim", "accountType": "atlassian"},
     {"accountId": "acc-alexa", "displayName": "Alexa Chen", "accountType": "atlassian"},
 ]
+SPRINTS = [
+    {"id": 4, "name": "SCRUM Sprint 4", "state": "active"},
+    {"id": 6, "name": "SCRUM Sprint 6", "state": "future", "startDate": "2026-11-14T00:00:00Z"},
+    {"id": 5, "name": "SCRUM Sprint 5", "state": "future", "startDate": "2026-10-31T00:00:00Z"},
+]
 
 
 def issue(key: str, summary: str = "Thing", status: str = "To Do") -> dict:
@@ -53,6 +58,12 @@ class FakeJira:
         path, method = request.url.path, request.method
         self.calls.append((method, path, dict(request.url.params), body))
 
+        if method == "GET" and path == "/rest/agile/1.0/board":
+            return httpx.Response(200, json={"values": [{"id": 1, "type": "scrum"}]})
+        if method == "GET" and path == "/rest/agile/1.0/board/1/sprint":
+            return httpx.Response(200, json={"values": SPRINTS})
+        if method == "POST" and path.startswith("/rest/agile/1.0/"):
+            return httpx.Response(204)
         if method == "POST" and path == "/rest/api/3/issue":
             bad = {k: v for k, v in self.reject_fields.items() if k in body["fields"]}
             if bad:
@@ -285,6 +296,58 @@ def test_dry_run_makes_no_mutations(jira):
     t = op("transition_issue", "SCRUM-1", resolve={"transition_name": "Done"})
     result = run(plan(create, t), jira, dry_run=True)
     assert result.status == "dry_run"
+    assert not jira.mutations()
+
+
+def test_move_to_active_sprint(jira):
+    result = run(plan(op("move_to_sprint", "SCRUM-3")), jira)
+    assert result.status == "ok", result
+    assert jira.mutations() == [("POST", "/rest/agile/1.0/sprint/4/issue", {}, {"issues": ["SCRUM-3"]})]
+    assert result.spoken_result == "Moved SCRUM-3 into SCRUM Sprint 4."
+
+
+@pytest.mark.parametrize("spoken", ["sprint 5", "next", "scrum sprint 5"])
+def test_move_to_named_or_next_sprint(jira, spoken):
+    result = run(plan(op("move_to_sprint", "SCRUM-3", resolve={"sprint_name": spoken})), jira)
+    assert result.status == "ok", result
+    assert jira.mutations()[0][1] == "/rest/agile/1.0/sprint/5/issue"
+
+
+def test_unknown_sprint_returns_clarify(jira):
+    result = run(plan(op("move_to_sprint", "SCRUM-3", resolve={"sprint_name": "sprint 9"})), jira)
+    assert result.status == "clarify"
+    assert "SCRUM Sprint 4" in result.clarification_question
+    assert not jira.mutations()
+
+
+def test_move_to_backlog(jira):
+    result = run(plan(op("move_to_backlog", "SCRUM-3")), jira)
+    assert result.status == "ok", result
+    assert jira.mutations() == [("POST", "/rest/agile/1.0/backlog/issue", {}, {"issues": ["SCRUM-3"]})]
+    assert result.spoken_result == "Moved SCRUM-3 to the backlog."
+
+
+def test_backlog_key_from_body_issues(jira):
+    b = op("move_to_backlog", rest__body={"issues": ["scrum-2"]})
+    del b["issue_key"]
+    result = run(plan(b), jira)
+    assert result.status == "ok", result
+    assert jira.mutations()[0][3] == {"issues": ["SCRUM-2"]}
+
+
+def test_create_then_move_to_sprint_chains_new_key(jira):
+    create = op("create_issue")
+    create["rest"]["body"]["fields"]["summary"] = "Redis connection leak"
+    result = run(plan(create, op("move_to_sprint", "$LAST")), jira)
+    assert result.status == "ok", result
+    assert jira.mutations()[-1][1:] == ("/rest/agile/1.0/sprint/4/issue", {}, {"issues": ["SCRUM-7"]})
+
+
+def test_sprint_moves_reject_foreign_keys_and_respect_dry_run(jira):
+    result = run(plan(op("move_to_backlog", "HR-9")), jira)
+    assert result.status == "failed"
+    result = run(plan(op("move_to_sprint", "SCRUM-3"), op("move_to_backlog", "SCRUM-4")), jira, dry_run=True)
+    assert result.status == "dry_run", result
     assert not jira.mutations()
 
 
